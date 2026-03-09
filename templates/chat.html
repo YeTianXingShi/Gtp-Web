@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="chat-page">
+    <header class="topbar">
+      <div>当前用户：<strong>{{ username }}</strong></div>
+      <div class="toolbar">
+        <label for="model-select">模型：</label>
+        <select id="model-select">
+          {% for model in models %}
+          <option value="{{ model }}">{{ model }}</option>
+          {% endfor %}
+        </select>
+        <button id="logout-btn" type="button">退出</button>
+      </div>
+    </header>
+
+    <main class="chat-shell">
+      <aside class="sidebar">
+        <input id="search-input" type="search" placeholder="搜索会话标题或内容..." />
+        <div class="side-actions">
+          <button id="new-conv-btn" type="button">+ 新对话</button>
+          <button id="rename-conv-btn" class="btn-secondary" type="button">重命名</button>
+          <button id="export-conv-btn" class="btn-secondary" type="button">导出</button>
+          <button id="delete-conv-btn" class="btn-danger" type="button">删除</button>
+        </div>
+        <div id="conversation-list" class="conversation-list"></div>
+      </aside>
+
+      <section class="chat-layout">
+        <section id="messages" class="messages"></section>
+        <form id="chat-form" class="input-row">
+          <div class="input-tools">
+            <label for="file-input" class="file-picker">+ 添加文件</label>
+            <input id="file-input" type="file" multiple />
+            <div id="selected-files" class="selected-files"></div>
+          </div>
+          <textarea id="prompt" rows="3" placeholder="输入你的问题（可选，可仅发送附件）..."></textarea>
+          <button id="send-btn" type="submit">发送</button>
+        </form>
+      </section>
+    </main>
+
+    <script>
+      window.__APP_CONFIG__ = {
+        username: "{{ username }}",
+        maxAttachmentsPerMessage: {{ max_attachments_per_message }},
+        maxUploadMB: {{ max_upload_mb }},
+        allowedAttachmentExts: {{ allowed_attachment_exts | tojson }},
+      };
+    </script>
+    <script src="{{ url_for('static', filename='chat.js') }}"></script>
+  </body>
+</html>

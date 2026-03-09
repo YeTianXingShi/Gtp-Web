@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+.DS_Store
+.idea/
+.env
+config/users.json
+data/*.db
+data/uploads/
+data/app.pid
+logs/

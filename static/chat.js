@@ -46,6 +46,19 @@ const MIME_TO_EXT = {
   "image/webp": ".webp",
   "image/gif": ".gif",
   "image/bmp": ".bmp",
+  "text/plain": ".txt",
+  "text/markdown": ".md",
+  "text/x-markdown": ".md",
+  "application/json": ".json",
+  "text/csv": ".csv",
+  "text/tab-separated-values": ".tsv",
+  "application/xml": ".xml",
+  "text/xml": ".xml",
+  "text/html": ".html",
+  "application/msword": ".doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+  "application/vnd.ms-excel": ".xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
 };
 const temporaryMessageObjectUrls = new Set();
 let pendingFileSeq = 0;
@@ -347,7 +360,7 @@ function renderSelectedFiles() {
   if (!state.pendingFiles.length) {
     const hint = document.createElement("span");
     hint.className = "selected-files-hint";
-    hint.textContent = "未选择附件，可直接在输入框粘贴图片";
+    hint.textContent = "未选择附件，可直接在输入框粘贴文件";
     selectedFilesEl.appendChild(hint);
     return;
   }
@@ -455,6 +468,55 @@ function appendPendingFiles(incomingFiles, source = "picker") {
   state.pendingFiles = merged;
   fileInputEl.value = "";
   renderSelectedFiles();
+}
+
+function buildFileFingerprint(file) {
+  return [
+    String(file.name || ""),
+    String(file.type || ""),
+    String(file.size || 0),
+    String(file.lastModified || 0),
+  ].join("::");
+}
+
+function clipboardLooksLikeFilePaste(clipboardData) {
+  if (!clipboardData) return false;
+
+  const types = Array.from(clipboardData.types || []).map((type) =>
+    String(type || "").trim().toLowerCase()
+  );
+  if (types.includes("files")) {
+    return true;
+  }
+
+  return Array.from(clipboardData.items || []).some((item) => item.kind === "file");
+}
+
+function collectClipboardFiles(clipboardData) {
+  if (!clipboardData) return [];
+
+  const seen = new Set();
+  const files = [];
+  const pushFile = (file) => {
+    if (!(file instanceof File)) return;
+    const fingerprint = buildFileFingerprint(file);
+    if (seen.has(fingerprint)) return;
+    seen.add(fingerprint);
+    files.push(file);
+  };
+
+  for (const file of Array.from(clipboardData.files || [])) {
+    pushFile(file);
+  }
+
+  for (const item of Array.from(clipboardData.items || [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    pushFile(file);
+  }
+
+  return files;
 }
 
 function buildLocalMessageAttachments(pendingFiles) {
@@ -950,17 +1012,17 @@ promptEl.addEventListener("paste", (event) => {
   const clipboardData = event.clipboardData;
   if (!clipboardData) return;
 
-  const pastedImages = [];
-  for (const item of Array.from(clipboardData.items || [])) {
-    if (item.kind !== "file") continue;
-    const file = item.getAsFile();
-    if (!file) continue;
-    if (!isImageMimeType(file.type) && !isImageFile(file)) continue;
-    pastedImages.push(file);
+  const pastedFiles = collectClipboardFiles(clipboardData);
+  if (!pastedFiles.length) {
+    if (clipboardLooksLikeFilePaste(clipboardData)) {
+      event.preventDefault();
+      addMessage("system", "未能读取剪贴板中的文件内容，请改用“添加文件”上传。");
+    }
+    return;
   }
-  if (!pastedImages.length) return;
 
-  appendPendingFiles(pastedImages, "paste");
+  event.preventDefault();
+  appendPendingFiles(pastedFiles, "paste");
 });
 
 searchInputEl.addEventListener("input", () => {

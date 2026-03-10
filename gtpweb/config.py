@@ -12,17 +12,62 @@ from .utils import safe_int
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_FILE = BASE_DIR / ".env"
+DEFAULT_ENV_DIR = BASE_DIR / "config" / "env"
 DEFAULT_USERS_FILE = BASE_DIR / "config" / "users.json"
 DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
 DEFAULT_UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 DEFAULT_LOG_FILE = BASE_DIR / "logs" / "app.log"
-load_dotenv(DEFAULT_ENV_FILE)
+
+
+@dataclass(frozen=True)
+class EnvGroupSpec:
+    key: str
+    filename: str
+    label: str
+    description: str
+
+
+ENV_GROUP_SPECS = (
+    EnvGroupSpec(
+        key="app",
+        filename="app.env",
+        label="应用基础配置",
+        description="维护应用密钥、登录配置路径、端口与调试开关。",
+    ),
+    EnvGroupSpec(
+        key="ai",
+        filename="ai.env",
+        label="AI 服务配置",
+        description="维护 AI_BASE_URL、AI_API_KEY 与 AI_MODELS。",
+    ),
+    EnvGroupSpec(
+        key="storage",
+        filename="storage.env",
+        label="存储路径配置",
+        description="维护数据库与上传目录等存储路径。",
+    ),
+    EnvGroupSpec(
+        key="attachments",
+        filename="attachments.env",
+        label="附件限制配置",
+        description="维护附件大小、数量、文本长度与扩展名白名单。",
+    ),
+    EnvGroupSpec(
+        key="logging",
+        filename="logging.env",
+        label="日志配置",
+        description="维护日志级别、日志文件与轮转策略。",
+    ),
+)
 
 
 @dataclass(frozen=True)
 class AppConfig:
     secret_key: str
     env_file: Path
+    env_files: tuple[Path, ...]
+    env_dir: Path | None
+    uses_grouped_env: bool
     users_file: Path
     users: dict[str, str]
     ai_base_url: str
@@ -64,9 +109,37 @@ def parse_bool(raw_value: str, default: bool) -> bool:
     return default
 
 
+def build_grouped_env_files(env_dir: Path) -> tuple[Path, ...]:
+    return tuple(env_dir / item.filename for item in ENV_GROUP_SPECS)
+
+
+def resolve_env_files() -> tuple[tuple[Path, ...], Path | None, bool]:
+    env_dir_raw = os.getenv("ENV_DIR", "").strip()
+    if env_dir_raw:
+        env_dir = Path(env_dir_raw)
+        if env_dir.exists() and not env_dir.is_dir():
+            raise ValueError("ENV_DIR must point to a directory.")
+        return build_grouped_env_files(env_dir), env_dir, True
+
+    env_file_raw = os.getenv("ENV_FILE", "").strip()
+    if env_file_raw:
+        return (Path(env_file_raw),), None, False
+
+    if DEFAULT_ENV_DIR.exists() and DEFAULT_ENV_DIR.is_dir():
+        return build_grouped_env_files(DEFAULT_ENV_DIR), DEFAULT_ENV_DIR, True
+
+    return (DEFAULT_ENV_FILE,), None, False
+
+
+def load_env_files(env_files: tuple[Path, ...]) -> None:
+    for env_file in env_files:
+        if env_file.exists():
+            load_dotenv(env_file, override=False)
+
+
 def load_config() -> AppConfig:
-    env_file = Path(os.getenv("ENV_FILE", str(DEFAULT_ENV_FILE)))
-    load_dotenv(env_file, override=False)
+    env_files, env_dir, uses_grouped_env = resolve_env_files()
+    load_env_files(env_files)
 
     users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
     users = load_users(users_file)
@@ -95,7 +168,10 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-change-me"),
-        env_file=env_file,
+        env_file=env_files[0],
+        env_files=env_files,
+        env_dir=env_dir,
+        uses_grouped_env=uses_grouped_env,
         users_file=users_file,
         users=users,
         ai_base_url=ai_base_url,

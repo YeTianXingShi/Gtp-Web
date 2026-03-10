@@ -58,6 +58,13 @@ def read_env_file_values(env_file: Path) -> dict[str, str]:
     return _normalize_env_values(dotenv_values(env_file))
 
 
+def read_env_files_values(env_files: tuple[Path, ...]) -> dict[str, str]:
+    merged_values: dict[str, str] = {}
+    for env_file in env_files:
+        merged_values.update(read_env_file_values(env_file))
+    return merged_values
+
+
 def parse_env_text(raw_text: str) -> dict[str, str]:
     return _normalize_env_values(dotenv_values(stream=StringIO(raw_text)))
 
@@ -137,7 +144,7 @@ def create_runtime_state(
     base_config: AppConfig,
     openai_client_factory: Callable[..., OpenAI],
 ) -> RuntimeState:
-    env_values = read_env_file_values(base_config.env_file)
+    env_values = read_env_files_values(base_config.env_files)
     settings = build_runtime_settings(base_config, env_values=env_values)
     openai_client = openai_client_factory(
         api_key=settings.ai_api_key,

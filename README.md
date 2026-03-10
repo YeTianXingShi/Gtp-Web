@@ -39,26 +39,37 @@ pip install -r requirements.txt
 ## 2. 配置
 
 ```bash
-cp .env.example .env
+cp -R config/env.example config/env
 cp config/users.example.json config/users.json
 ```
 
 然后编辑：
 
-- `.env`
+- `config/env/app.env`
+  - `APP_SECRET_KEY`: Flask 会话密钥
+  - `USERS_FILE`: 用户配置文件路径
+  - `PORT`: Web 服务端口
+  - `FLASK_DEBUG`: 调试开关
+- `config/env/ai.env`
   - `AI_BASE_URL`: 你的 AI API 根地址，例如 `https://api.openai.com/v1`
   - `AI_API_KEY`: 你的服务密钥
   - `AI_MODELS`: 固定模型列表，逗号分隔
+- `config/env/storage.env`
   - `CHAT_DB_FILE`: 聊天记录数据库文件路径（默认 `./data/chat.db`）
   - `UPLOAD_DIR`: 附件存储目录（默认 `./data/uploads`）
+- `config/env/attachments.env`
   - `MAX_UPLOAD_MB`: 单文件最大大小（默认 `15`）
   - `MAX_ATTACHMENTS_PER_MESSAGE`: 单次消息最大附件数量（默认 `5`）
+  - `MAX_TEXT_FILE_CHARS`: 文本类附件最大读取字符数
   - `ALLOWED_ATTACHMENT_EXTS`: 严格白名单扩展名（逗号分隔，未命中直接拒绝）
+- `config/env/logging.env`
   - `LOG_LEVEL`: 日志等级（`DEBUG/INFO/WARNING/ERROR`，建议 `DEBUG` 获取完整链路）
   - `LOG_FILE`: 主日志文件路径（默认 `./logs/app.log`，会自动创建目录并轮转）
   - `LOG_MAX_BYTES`: 单日志文件最大字节（默认 `10485760`）
   - `LOG_BACKUP_COUNT`: 日志轮转保留份数（默认 `5`）
   - `LOG_TO_STDOUT`: 是否同时输出到控制台（`1/0`）
+- 兼容旧模式
+  - 仍支持单文件 `.env`；如需沿用旧方式，可执行 `cp .env.example .env`
 - `config/users.json`
   - 预置登录账号、密码和管理员权限
   - 推荐结构：`{"users":[{"username":"admin","password":"...","is_admin":true}]}`
@@ -86,9 +97,10 @@ pytest
 ## 5. 后台管理
 
 - 管理员账号同样存放在 `config/users.json`，通过 `is_admin: true` 标识。
-- 管理员登录后默认进入 `/admin`，可管理用户账号，并切换编辑 `config/users.json` 与 `.env`。
+- 管理员登录后默认进入 `/admin`，可管理用户账号，并切换编辑 `config/users.json` 与环境配置文件。
 - `config/users.json` 保存后立即生效；如果当前管理员在配置中被移除或取消管理员权限，系统会拒绝保存。
-- `.env` 保存后会立即写盘，但通常需要重启服务后才会完全生效。
+- 推荐使用 `config/env/*.env` 分组维护环境变量；系统会按固定分组分别展示与保存。
+- 环境变量文件保存后会立即写盘，并自动热更新支持的运行项；结构性配置仍按提示决定是否重启。
 
 ## 6. 当前边界
 

@@ -64,7 +64,7 @@ function applyConfigFileMeta(fileData) {
   configPathEl.textContent = fileData.path || "";
   configDescriptionEl.textContent = fileData.description || "";
 
-  if (fileData.id === "app_env") {
+  if (fileData.format === "dotenv") {
     configRestartHintEl.textContent = "保存后会自动热更新支持的运行项，结构性配置仍需重启";
     configRestartHintEl.classList.add("is-warning");
     return;

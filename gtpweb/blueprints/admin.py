@@ -7,8 +7,8 @@ from typing import Any
 
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for
 
-from gtpweb.config import AppConfig
-from gtpweb.runtime_state import apply_runtime_env_values, parse_env_text
+from gtpweb.config import AppConfig, ENV_GROUP_SPECS
+from gtpweb.runtime_state import apply_runtime_env_values, read_env_files_values
 from gtpweb.user_store import get_user_record, normalize_users_config, save_users_config, users_config_to_text
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ def _normalize_text_file_content(raw_text: str) -> str:
 
 
 def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
-    return {
+    config_files: dict[str, dict[str, Any]] = {
         CONFIG_FILE_AUTH_USERS: {
             "id": CONFIG_FILE_AUTH_USERS,
             "label": "认证配置",
@@ -66,15 +66,29 @@ def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
             "requires_restart": False,
             "format": "json",
         },
-        CONFIG_FILE_APP_ENV: {
+    }
+
+    if config.uses_grouped_env:
+        for spec, path in zip(ENV_GROUP_SPECS, config.env_files):
+            config_files[f"env_{spec.key}"] = {
+                "id": f"env_{spec.key}",
+                "label": spec.label,
+                "description": f"{spec.description} 保存后会自动热更新支持的运行项，结构性配置仍需重启。",
+                "path": path,
+                "requires_restart": True,
+                "format": "dotenv",
+            }
+        return config_files
+
+    config_files[CONFIG_FILE_APP_ENV] = {
             "id": CONFIG_FILE_APP_ENV,
             "label": "应用环境变量",
             "description": "编辑 .env 配置。支持自动热更新部分运行项，结构性配置仍需重启。",
             "path": config.env_file,
             "requires_restart": True,
             "format": "dotenv",
-        },
     }
+    return config_files
 
 
 def _serialize_config_file_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -206,14 +220,17 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         hot_reload: dict[str, list[str]] | None = None
         try:
             item = _get_config_file_item(config_files, file_id)
-            parsed_env_values = parse_env_text(raw_content) if item["id"] == CONFIG_FILE_APP_ENV else None
             content = _save_config_file_content(
                 item,
                 raw_content,
                 current_username=current_record["username"],
             )
-            if parsed_env_values is not None:
-                hot_reload = apply_runtime_env_values(current_app, config, parsed_env_values)
+            if item["format"] == "dotenv":
+                hot_reload = apply_runtime_env_values(
+                    current_app,
+                    config,
+                    read_env_files_values(config.env_files),
+                )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 

@@ -9,10 +9,11 @@ set -euo pipefail
 #
 # NOTE:
 # - This script does NOT initialize or modify config files.
-# - Ensure .env and config/users.json already exist before running.
+# - Ensure .env or config/env/*.env, and config/users.json already exist before running.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${PROJECT_DIR}/.env"
+ENV_FILE="${ENV_FILE:-${PROJECT_DIR}/.env}"
+ENV_DIR="${ENV_DIR:-${PROJECT_DIR}/config/env}"
 USERS_FILE="${PROJECT_DIR}/config/users.json"
 VENV_DIR="${PROJECT_DIR}/.venv"
 PID_FILE="${PROJECT_DIR}/data/app.pid"
@@ -70,25 +71,45 @@ install_python_deps() {
   exit 1
 }
 
-read_env_port() {
+has_grouped_env() {
+  [[ -d "${ENV_DIR}" ]] && find "${ENV_DIR}" -maxdepth 1 -type f -name '*.env' | grep -q .
+}
+
+read_env_value() {
+  local key="$1"
   local line=""
-  if [[ -f "${ENV_FILE}" ]]; then
-    line="$(grep -E '^PORT=' "${ENV_FILE}" | tail -n 1 || true)"
+  local current_line=""
+  local env_path=""
+
+  if has_grouped_env; then
+    while IFS= read -r env_path; do
+      current_line="$(grep -E "^${key}=" "${env_path}" | tail -n 1 || true)"
+      if [[ -n "${current_line}" ]]; then
+        line="${current_line}"
+      fi
+    done < <(find "${ENV_DIR}" -maxdepth 1 -type f -name '*.env' | sort)
+  elif [[ -f "${ENV_FILE}" ]]; then
+    line="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 || true)"
   fi
+
   if [[ -z "${line}" ]]; then
-    echo "8000"
-    return
+    return 1
   fi
+
   line="${line#*=}"
   line="${line%\"}"
   line="${line#\"}"
   line="${line%\'}"
   line="${line#\'}"
   if [[ -z "${line}" ]]; then
-    echo "8000"
-    return
+    return 1
   fi
-  echo "${line}"
+
+  printf '%s\n' "${line}"
+}
+
+read_env_port() {
+  read_env_value PORT || echo "8000"
 }
 
 echo "[1/5] Checking Python..."
@@ -103,9 +124,9 @@ if ! python3 -m venv --help >/dev/null 2>&1; then
 fi
 
 echo "[2/5] Checking required config files..."
-if [[ ! -f "${ENV_FILE}" ]]; then
-  echo "Error: missing ${ENV_FILE}" >&2
-  echo "Please prepare .env first, then rerun." >&2
+if ! has_grouped_env && [[ ! -f "${ENV_FILE}" ]]; then
+  echo "Error: missing ${ENV_FILE} or ${ENV_DIR}/*.env" >&2
+  echo "Please prepare grouped env files or a single .env first, then rerun." >&2
   exit 1
 fi
 if [[ ! -f "${USERS_FILE}" ]]; then

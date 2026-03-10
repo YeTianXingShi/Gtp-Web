@@ -9,16 +9,7 @@ from flask import Blueprint, current_app, jsonify, redirect, render_template, re
 
 from gtpweb.config import AppConfig
 from gtpweb.runtime_state import apply_runtime_env_values, parse_env_text
-from gtpweb.user_store import (
-    create_user,
-    delete_user,
-    get_user_record,
-    list_users,
-    normalize_users_config,
-    save_users_config,
-    update_user,
-    users_config_to_text,
-)
+from gtpweb.user_store import get_user_record, normalize_users_config, save_users_config, users_config_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -167,79 +158,6 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             username=record["username"],
             config_files=[_serialize_config_file_item(item) for item in config_files.values()],
         )
-
-    @bp.get("/api/admin/users")
-    def list_admin_users() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-        return jsonify({"ok": True, "users": list_users(users_file)})
-
-    @bp.post("/api/admin/users")
-    def create_admin_user() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
-        payload = request.get_json(silent=True) or {}
-        username = str(payload.get("username", "")).strip()
-        password = str(payload.get("password", ""))
-        is_admin = payload.get("is_admin", False) if isinstance(payload.get("is_admin", False), bool) else False
-
-        try:
-            created_user = create_user(users_file, username, password, is_admin)
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-
-        logger.info("后台新增用户成功: 用户名=%s 管理员=%s", created_user["username"], created_user["is_admin"])
-        return jsonify({"ok": True, "user": created_user}), 201
-
-    @bp.patch("/api/admin/users/<username>")
-    def update_admin_user(username: str) -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
-        payload = request.get_json(silent=True) or {}
-        password: str | None = None
-        if "password" in payload:
-            password = str(payload.get("password", ""))
-        is_admin: bool | None = None
-        if "is_admin" in payload:
-            raw_is_admin = payload.get("is_admin")
-            if not isinstance(raw_is_admin, bool):
-                return jsonify({"ok": False, "error": "is_admin 必须是布尔值"}), 400
-            is_admin = raw_is_admin
-        if password is None and is_admin is None:
-            return jsonify({"ok": False, "error": "没有可更新的字段"}), 400
-
-        try:
-            updated_user = update_user(
-                users_file,
-                username,
-                password=password,
-                is_admin=is_admin,
-                current_username=current_record["username"],
-            )
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-
-        logger.info("后台更新用户成功: 用户名=%s 管理员=%s", updated_user["username"], updated_user["is_admin"])
-        return jsonify({"ok": True, "user": updated_user})
-
-    @bp.delete("/api/admin/users/<username>")
-    def delete_admin_user(username: str) -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
-        try:
-            delete_user(users_file, username, current_username=current_record["username"])
-        except ValueError as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 400
-
-        logger.info("后台删除用户成功: 用户名=%s", username)
-        return jsonify({"ok": True})
 
     @bp.get("/api/admin/config-files")
     def list_config_files() -> Any:

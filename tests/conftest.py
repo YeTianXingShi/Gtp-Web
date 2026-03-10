@@ -90,16 +90,35 @@ class _FakeGenerateImagesResponse:
         self.generated_images = [_FakeGeneratedImage(image_bytes=image_bytes)]
 
 
+class _FakeGoogleBlob:
+    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
+        self.data = image_bytes
+        self.mime_type = mime_type
+
+
+class _FakeGooglePart:
+    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
+        self.inline_data = _FakeGoogleBlob(image_bytes=image_bytes, mime_type=mime_type)
+        self.text = None
+
+
+class _FakeGenerateContentImageResponse:
+    def __init__(self, image_bytes: bytes):
+        self.parts = [_FakeGooglePart(image_bytes=image_bytes)]
+
+
 class _FakeGoogleModels:
     def __init__(
         self,
         seen_requests: list[dict],
-        seen_image_requests: list[dict],
+        seen_generate_images_requests: list[dict],
+        seen_generate_content_image_requests: list[dict],
         stream_text: str,
         image_bytes: bytes,
     ):
         self._seen_requests = seen_requests
-        self._seen_image_requests = seen_image_requests
+        self._seen_generate_images_requests = seen_generate_images_requests
+        self._seen_generate_content_image_requests = seen_generate_content_image_requests
         self._stream_text = stream_text
         self._image_bytes = image_bytes
 
@@ -108,22 +127,28 @@ class _FakeGoogleModels:
         return [_FakeGoogleChunk(self._stream_text)]
 
     def generate_images(self, **kwargs):
-        self._seen_image_requests.append(kwargs)
+        self._seen_generate_images_requests.append(kwargs)
         return _FakeGenerateImagesResponse(self._image_bytes)
+
+    def generate_content(self, **kwargs):
+        self._seen_generate_content_image_requests.append(kwargs)
+        return _FakeGenerateContentImageResponse(self._image_bytes)
 
 
 class _FakeGoogleClient:
     def __init__(
         self,
         seen_requests: list[dict],
-        seen_image_requests: list[dict],
+        seen_generate_images_requests: list[dict],
+        seen_generate_content_image_requests: list[dict],
         stream_text: str,
         image_bytes: bytes,
         **_kwargs,
     ):
         self.models = _FakeGoogleModels(
             seen_requests=seen_requests,
-            seen_image_requests=seen_image_requests,
+            seen_generate_images_requests=seen_generate_images_requests,
+            seen_generate_content_image_requests=seen_generate_content_image_requests,
             stream_text=stream_text,
             image_bytes=image_bytes,
         )
@@ -221,6 +246,7 @@ def _create_test_app(
     seen_openai_image_requests: list[dict] = []
     seen_google_requests: list[dict] = []
     seen_google_image_requests: list[dict] = []
+    seen_google_content_image_requests: list[dict] = []
     seen_google_client_kwargs: list[dict] = []
 
     def _build_fake_openai(**kwargs):
@@ -236,7 +262,8 @@ def _create_test_app(
         seen_google_client_kwargs.append(dict(kwargs))
         return _FakeGoogleClient(
             seen_requests=seen_google_requests,
-            seen_image_requests=seen_google_image_requests,
+            seen_generate_images_requests=seen_google_image_requests,
+            seen_generate_content_image_requests=seen_google_content_image_requests,
             stream_text=google_stream_text,
             image_bytes=image_bytes,
             **kwargs,
@@ -251,6 +278,7 @@ def _create_test_app(
     flask_app.extensions["seen_openai_image_requests"] = seen_openai_image_requests
     flask_app.extensions["seen_google_requests"] = seen_google_requests
     flask_app.extensions["seen_google_image_requests"] = seen_google_image_requests
+    flask_app.extensions["seen_google_content_image_requests"] = seen_google_content_image_requests
     flask_app.extensions["seen_google_client_kwargs"] = seen_google_client_kwargs
     return flask_app
 

@@ -168,6 +168,63 @@ def _read_google_generated_image(item: Any) -> tuple[bytes, str, str] | None:
 
 
 
+def _read_google_inline_image_blob(blob: Any) -> tuple[bytes, str, str] | None:
+    if isinstance(blob, dict):
+        image_bytes = blob.get("data")
+        mime_type = blob.get("mime_type")
+    else:
+        image_bytes = getattr(blob, "data", None)
+        mime_type = getattr(blob, "mime_type", None)
+
+    normalized_mime_type = str(mime_type or "").strip() or "image/png"
+    if isinstance(image_bytes, str) and image_bytes.strip():
+        try:
+            image_bytes = base64.b64decode(image_bytes)
+        except Exception:
+            image_bytes = None
+    if isinstance(image_bytes, bytes) and image_bytes:
+        return image_bytes, _build_generated_file_name(normalized_mime_type), normalized_mime_type
+    return None
+
+
+
+def _read_google_content_image_response(response: Any) -> tuple[bytes, str, str] | None:
+    parts = getattr(response, "parts", None)
+    if parts is None and isinstance(response, dict):
+        candidates = response.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            first_candidate = candidates[0]
+            if isinstance(first_candidate, dict):
+                content = first_candidate.get("content")
+                if isinstance(content, dict):
+                    parts = content.get("parts")
+
+    if not isinstance(parts, list) or not parts:
+        return None
+
+    text_fragments: list[str] = []
+    for part in parts:
+        if isinstance(part, dict):
+            inline_data = part.get("inline_data")
+            text = part.get("text")
+        else:
+            inline_data = getattr(part, "inline_data", None)
+            text = getattr(part, "text", None)
+
+        if inline_data is not None:
+            image_result = _read_google_inline_image_blob(inline_data)
+            if image_result is not None:
+                return image_result
+
+        if isinstance(text, str) and text.strip():
+            text_fragments.append(text.strip())
+
+    if text_fragments:
+        raise RuntimeError(f"图片接口未返回图片内容：{' '.join(text_fragments)}")
+    return None
+
+
+
 def _save_generated_image(
     *,
     image_bytes: bytes,
@@ -237,7 +294,7 @@ def _resolve_image_tool_selection(
 
 
 
-def _build_google_image_config(action: AssistantAction) -> dict[str, Any]:
+def _build_google_generate_images_config(action: AssistantAction) -> dict[str, Any]:
     config: dict[str, Any] = {}
     negative_prompt = str(action.action_input.get("negative_prompt", "")).strip()
     aspect_ratio = str(action.action_input.get("aspect_ratio", "")).strip()
@@ -256,6 +313,57 @@ def _build_google_image_config(action: AssistantAction) -> dict[str, Any]:
     if image_size:
         config["image_size"] = image_size
     return config
+
+
+
+def _build_google_generate_content_request(
+    action: AssistantAction,
+    *,
+    prompt: str,
+) -> tuple[list[str], Any]:
+    try:
+        from google.genai import types
+    except ImportError as exc:
+        raise RuntimeError(
+            "当前环境缺少 `google-genai` 依赖，请先执行 `pip install -r requirements.txt`。"
+        ) from exc
+
+    aspect_ratio = str(action.action_input.get("aspect_ratio", "")).strip()
+    size = str(action.action_input.get("size", "")).strip()
+    image_size = str(action.action_input.get("image_size", "")).strip()
+    negative_prompt = str(action.action_input.get("negative_prompt", "")).strip()
+
+    content_text = prompt
+    if negative_prompt:
+        content_text = f"{content_text}\n\n请避免以下内容：{negative_prompt}"
+
+    image_config_kwargs: dict[str, Any] = {}
+    if not aspect_ratio and size:
+        aspect_ratio = _OPENAI_SIZE_TO_GOOGLE_ASPECT_RATIO.get(size, "")
+    if aspect_ratio:
+        image_config_kwargs["aspect_ratio"] = aspect_ratio
+    if image_size:
+        image_config_kwargs["image_size"] = image_size
+
+    config_kwargs: dict[str, Any] = {
+        "response_modalities": ["IMAGE"],
+    }
+    if image_config_kwargs:
+        config_kwargs["image_config"] = types.ImageConfig(**image_config_kwargs)
+
+    return [content_text], types.GenerateContentConfig(**config_kwargs)
+
+
+
+def _is_google_imagen_model(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    return normalized.startswith("imagen-")
+
+
+
+def _is_google_gemini_image_model(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    return normalized.startswith("gemini-") and "-image" in normalized
 
 
 
@@ -311,7 +419,7 @@ def _execute_openai_image_action(
 
 
 
-def _execute_google_image_action(
+def _execute_google_generate_images_action(
     action: AssistantAction,
     *,
     model_name: str,
@@ -330,15 +438,14 @@ def _execute_google_image_action(
         "model": model_name,
         "prompt": prompt,
     }
-    config = _build_google_image_config(action)
+    config = _build_google_generate_images_config(action)
     if config:
         request_kwargs["config"] = config
 
     logger.info(
-        "开始执行图片动作: 动作=%s 会话ID=%s Provider=%s 模型=%s 提示词长度=%s",
+        "开始执行 Google 图片动作(generate_images): 动作=%s 会话ID=%s 模型=%s 提示词长度=%s",
         action.name,
         conversation_id,
-        PROVIDER_GOOGLE,
         model_name,
         len(prompt),
     )
@@ -356,6 +463,85 @@ def _execute_google_image_action(
         conversation_id=conversation_id,
         upload_dir=upload_dir,
         safe_username=safe_username,
+    )
+
+
+
+def _execute_google_generate_content_image_action(
+    action: AssistantAction,
+    *,
+    model_name: str,
+    google_client: Any | None,
+    prompt: str,
+    conversation_id: int,
+    upload_dir: Path,
+    safe_username: str,
+) -> ActionExecutionResult:
+    if google_client is None:
+        return ActionExecutionResult(
+            message_text="模型请求生成图片，但当前系统未配置可用的图片生成服务。"
+        )
+
+    contents, config = _build_google_generate_content_request(action, prompt=prompt)
+    logger.info(
+        "开始执行 Google 图片动作(generate_content): 动作=%s 会话ID=%s 模型=%s 提示词长度=%s",
+        action.name,
+        conversation_id,
+        model_name,
+        len(prompt),
+    )
+    response = google_client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config,
+    )
+    image_result = _read_google_content_image_response(response)
+    if image_result is None:
+        raise RuntimeError("图片接口未返回可识别的图片内容")
+
+    return _build_success_result(
+        image_result=image_result,
+        conversation_id=conversation_id,
+        upload_dir=upload_dir,
+        safe_username=safe_username,
+    )
+
+
+
+def _execute_google_image_action(
+    action: AssistantAction,
+    *,
+    model_name: str,
+    google_client: Any | None,
+    prompt: str,
+    conversation_id: int,
+    upload_dir: Path,
+    safe_username: str,
+) -> ActionExecutionResult:
+    if _is_google_imagen_model(model_name):
+        return _execute_google_generate_images_action(
+            action,
+            model_name=model_name,
+            google_client=google_client,
+            prompt=prompt,
+            conversation_id=conversation_id,
+            upload_dir=upload_dir,
+            safe_username=safe_username,
+        )
+
+    if _is_google_gemini_image_model(model_name):
+        return _execute_google_generate_content_image_action(
+            action,
+            model_name=model_name,
+            google_client=google_client,
+            prompt=prompt,
+            conversation_id=conversation_id,
+            upload_dir=upload_dir,
+            safe_username=safe_username,
+        )
+
+    raise RuntimeError(
+        f"Google 图片模型 `{model_name}` 暂未适配，请使用 imagen-* 或 gemini-*-image* 模型。"
     )
 
 

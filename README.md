@@ -91,6 +91,54 @@ python app.py
 
 浏览器访问：`http://127.0.0.1:8000`
 
+## 3.1 自动部署脚本
+
+新增 `deploy.sh`，用于执行以下流程：
+
+- 本地执行 `git push`
+- 通过 SSH 连接远程服务器
+- 进入配置的项目目录执行 `git pull`
+- 执行停止命令
+- 覆盖同步本地 `config/env` 与 `config/users.json` 到远程同路径
+- 执行启动命令
+
+准备配置文件：
+
+```bash
+cp config/deploy.example.env config/deploy.env
+```
+
+然后按需修改 `config/deploy.env`：
+
+- `DEPLOY_HOST` / `DEPLOY_PORT` / `DEPLOY_USER` / `DEPLOY_PASSWORD`：远程服务器连接信息
+- `REMOTE_DIR`：远程项目目录
+- `LOCAL_GIT_BRANCH`：本地要推送的分支
+- `REMOTE_GIT_BRANCH`：远程要拉取的分支
+- `REMOTE_STOP_CMD`：远程停止命令
+- `REMOTE_START_CMD`：远程启动命令
+- `SYNC_LOCAL_CONFIG`：是否同步本地配置文件，默认 `1`
+- `LOCAL_ENV_DIR` / `LOCAL_USERS_FILE`：本地配置目录与用户文件路径
+- `REMOTE_ENV_DIR` / `REMOTE_USERS_FILE`：远程目标路径；默认会落到远程项目目录下同名位置
+
+执行方式：
+
+```bash
+bash deploy.sh
+```
+
+如需指定其他配置文件：
+
+```bash
+bash deploy.sh /path/to/deploy.env
+```
+
+说明：
+
+- 如果配置了 `DEPLOY_PASSWORD`，脚本会通过 `sshpass` 进行免交互登录，因此本机需要预先安装 `sshpass`。
+- 如果清空 `DEPLOY_PASSWORD`，脚本会退回到 SSH Key 或交互式密码输入方式。
+- 默认会在远程执行 `git pull` 和停止命令后，覆盖上传本地 `config/env` 与 `config/users.json`，再执行启动命令。
+- `config/deploy.env` 已加入 `.gitignore`，避免将真实服务器密码提交到仓库。
+
 ## 4. 测试
 
 ```bash

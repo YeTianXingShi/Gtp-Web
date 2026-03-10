@@ -8,3 +8,4 @@ data/*.db
 data/uploads/
 data/app.pid
 logs/
+config/deploy.env

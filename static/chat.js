@@ -853,7 +853,6 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     if (!streamTextNode || !pendingStreamText) return;
     streamTextNode.appendData(pendingStreamText);
     pendingStreamText = "";
-    messagesEl.scrollTop = messagesEl.scrollHeight;
   };
 
   const scheduleStreamTextFlush = () => {
@@ -869,7 +868,6 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     flushStreamText();
     assistantContentEl.classList.remove("is-streaming");
     assistantContentEl.innerHTML = renderMarkdown(finalReply);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
   };
 
   if (assistantContentEl) {
@@ -1102,10 +1100,10 @@ chatForm.addEventListener("submit", async (event) => {
   state.sending = true;
   updateActionButtons();
 
+  let streamSucceeded = false;
   try {
     await streamReply({ conversationId, model, content, files, assistantEl });
-    await loadConversations();
-    renderConversations();
+    streamSucceeded = true;
   } catch (err) {
     if (!err || err.keepPartial !== true) {
       assistantEl.remove();
@@ -1115,6 +1113,16 @@ chatForm.addEventListener("submit", async (event) => {
     state.sending = false;
     updateActionButtons();
     promptEl.focus();
+  }
+
+  if (!streamSucceeded) {
+    return;
+  }
+
+  try {
+    await loadConversations();
+  } catch (err) {
+    addMessage("system", `刷新会话列表失败：${getErrorMessage(err)}`);
   }
 });
 

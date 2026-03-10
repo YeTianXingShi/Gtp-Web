@@ -10,6 +10,13 @@ from flask import Blueprint, Response, jsonify, request, session, stream_with_co
 from openai import APIStatusError, OpenAIError
 from werkzeug.datastructures import FileStorage
 
+from gtpweb.ai_providers import (
+    PROVIDER_GOOGLE,
+    PROVIDER_OPENAI,
+    build_google_contents,
+    extract_google_text_delta,
+    resolve_model_option,
+)
 from gtpweb.attachments import (
     build_file_text_block,
     build_message_content_for_model,
@@ -62,13 +69,12 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         runtime_state = get_runtime_state()
         runtime_settings = runtime_state.settings
         openai_client = runtime_state.openai_client
+        google_client = runtime_state.google_client
         max_upload_mb = runtime_settings.max_upload_mb
         max_upload_bytes = runtime_settings.max_upload_bytes
         max_attachments_per_message = runtime_settings.max_attachments_per_message
         max_text_file_chars = runtime_settings.max_text_file_chars
         allowed_attachment_exts = runtime_settings.allowed_attachment_exts
-        models = runtime_settings.models
-        ai_base_url = runtime_settings.ai_base_url
 
         content_type = request.content_type or ""
         uploaded_files: list[FileStorage] = []
@@ -105,8 +111,14 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
 
         if not content and not uploaded_files:
             return jsonify({"ok": False, "error": "消息内容和附件不能同时为空"}), 400
-        if model not in models:
+
+        model_option = resolve_model_option(model, runtime_settings.model_options)
+        if model_option is None:
             return jsonify({"ok": False, "error": "无效的模型"}), 400
+        selected_model_id = model_option.id
+        selected_provider = model_option.provider
+        upstream_model = model_option.model_name
+
         if not isinstance(conversation_id, int):
             return jsonify({"ok": False, "error": "conversation_id 无效"}), 400
         if len(uploaded_files) > max_attachments_per_message:
@@ -310,7 +322,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 SET title = ?, model = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (updated_title, model, conversation_id),
+                (updated_title, selected_model_id, conversation_id),
             )
             conn.commit()
             logger.info(
@@ -325,45 +337,83 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             client_disconnected = False
             delta_count = 0
             started_at = time.perf_counter()
-            request_kwargs: dict[str, Any] = {
-                "model": model,
-                "messages": completion_messages,
-                "stream": True,
-            }
             logger.info(
-                "开始调用上游模型: 会话ID=%s 模型=%s 上下文消息数=%s",
+                "开始调用上游模型: 会话ID=%s 来源=%s 模型=%s 上下文消息数=%s",
                 conversation_id,
-                model,
+                selected_provider,
+                upstream_model,
                 len(completion_messages),
             )
 
             try:
-                stream = openai_client.chat.completions.create(**request_kwargs)
-                for event_obj in stream:
-                    delta = extract_text_delta(event_obj)
-                    if delta:
-                        assistant_parts.append(delta)
-                        delta_count += 1
-                        if delta_count % 20 == 0:
-                            logger.debug(
-                                "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                conversation_id,
-                                delta_count,
-                                len("".join(assistant_parts)),
-                            )
-                        yield sse_payload({"type": "delta", "text": delta})
+                if selected_provider == PROVIDER_OPENAI:
+                    if openai_client is None:
+                        raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
+                    request_kwargs: dict[str, Any] = {
+                        "model": upstream_model,
+                        "messages": completion_messages,
+                        "stream": True,
+                    }
+                    stream = openai_client.chat.completions.create(**request_kwargs)
+                    for event_obj in stream:
+                        delta = extract_text_delta(event_obj)
+                        if delta:
+                            assistant_parts.append(delta)
+                            delta_count += 1
+                            if delta_count % 20 == 0:
+                                logger.debug(
+                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                    conversation_id,
+                                    delta_count,
+                                    len("".join(assistant_parts)),
+                                )
+                            yield sse_payload({"type": "delta", "text": delta})
 
-                if not assistant_parts and not has_error:
-                    has_error = True
-                    yield sse_payload(
-                        {
-                            "type": "error",
-                            "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
-                        }
-                    )
+                    if not assistant_parts and not has_error:
+                        has_error = True
+                        yield sse_payload(
+                            {
+                                "type": "error",
+                                "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
+                            }
+                        )
+                elif selected_provider == PROVIDER_GOOGLE:
+                    if google_client is None:
+                        raise RuntimeError("Google Gemini 客户端未初始化，请检查 GOOGLE 配置。")
+                    request_kwargs = {
+                        "model": upstream_model,
+                        "contents": build_google_contents(completion_messages),
+                    }
+                    stream = google_client.models.generate_content_stream(**request_kwargs)
+                    for event_obj in stream:
+                        delta = extract_google_text_delta(event_obj)
+                        if delta:
+                            assistant_parts.append(delta)
+                            delta_count += 1
+                            if delta_count % 20 == 0:
+                                logger.debug(
+                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                    conversation_id,
+                                    delta_count,
+                                    len("".join(assistant_parts)),
+                                )
+                            yield sse_payload({"type": "delta", "text": delta})
+
+                    if not assistant_parts and not has_error:
+                        has_error = True
+                        yield sse_payload(
+                            {
+                                "type": "error",
+                                "error": "请求 Gemini 成功但未收到流式文本，请确认模型支持流式输出。",
+                            }
+                        )
+                else:
+                    raise RuntimeError(f"不支持的模型来源: {selected_provider}")
+
                 logger.info(
-                    "上游模型调用完成: 会话ID=%s 分片数=%s 输出字符=%s 耗时毫秒=%.2f",
+                    "上游模型调用完成: 会话ID=%s 来源=%s 分片数=%s 输出字符=%s 耗时毫秒=%.2f",
                     conversation_id,
+                    selected_provider,
                     delta_count,
                     len("".join(assistant_parts)),
                     (time.perf_counter() - started_at) * 1000,
@@ -379,7 +429,12 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     status,
                     message,
                 )
-                yield sse_payload({"type": "error", "error": f"{ai_base_url} ({status}): {message}"})
+                yield sse_payload(
+                    {
+                        "type": "error",
+                        "error": f"{runtime_settings.openai_base_url} ({status}): {message}",
+                    }
+                )
             except GeneratorExit:
                 client_disconnected = True
                 logger.info("聊天流连接已断开: 会话ID=%s（客户端可能已关闭连接）", conversation_id)
@@ -387,11 +442,15 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             except OpenAIError as exc:
                 has_error = True
                 logger.exception("OpenAI SDK 调用异常: 会话ID=%s", conversation_id)
-                yield sse_payload({"type": "error", "error": f"AI SDK 调用失败: {exc}"})
+                yield sse_payload({"type": "error", "error": f"OpenAI SDK 调用失败: {exc}"})
             except Exception as exc:
                 has_error = True
-                logger.exception("聊天流内部异常: 会话ID=%s", conversation_id)
-                yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
+                if selected_provider == PROVIDER_GOOGLE:
+                    logger.exception("Google Gemini SDK 调用异常: 会话ID=%s", conversation_id)
+                    yield sse_payload({"type": "error", "error": f"Google Gemini 调用失败: {exc}"})
+                else:
+                    logger.exception("聊天流内部异常: 会话ID=%s", conversation_id)
+                    yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
             finally:
                 assistant_text = "".join(assistant_parts).strip()
                 if assistant_text:

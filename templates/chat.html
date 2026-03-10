@@ -12,8 +12,12 @@
       <div class="toolbar">
         <label for="model-select">模型：</label>
         <select id="model-select">
-          {% for model in models %}
-          <option value="{{ model }}">{{ model }}</option>
+          {% for group in model_groups %}
+          <optgroup label="{{ group.label }}">
+            {% for model in group.options %}
+            <option value="{{ model.id }}">{{ model.label }}</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
         {% if is_admin %}

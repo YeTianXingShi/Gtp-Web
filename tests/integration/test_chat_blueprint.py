@@ -12,7 +12,7 @@ PNG_1X1_BYTES = (
 
 
 def _create_conversation(client) -> int:
-    resp = client.post("/api/conversations", json={"model": "gpt-4o-mini"})
+    resp = client.post("/api/conversations", json={"model": "openai:gpt-4o-mini"})
     assert resp.status_code == 201
     return int(resp.get_json()["conversation"]["id"])
 
@@ -24,7 +24,7 @@ def test_chat_stream_with_text_attachment(logged_in_client, app):
         "/api/chat/stream",
         data={
             "conversation_id": str(conv_id),
-            "model": "gpt-4o-mini",
+            "model": "openai:gpt-4o-mini",
             "content": "请看附件",
             "files": [(io.BytesIO(b"hello"), "note.txt")],
         },
@@ -46,7 +46,7 @@ def test_chat_stream_rejects_non_whitelist_extension(logged_in_client):
         "/api/chat/stream",
         data={
             "conversation_id": str(conv_id),
-            "model": "gpt-4o-mini",
+            "model": "openai:gpt-4o-mini",
             "content": "bad file",
             "files": [(io.BytesIO(b"%PDF-1.4"), "forbidden.pdf")],
         },
@@ -71,7 +71,7 @@ def test_chat_stream_accepts_unicode_docx_filename(logged_in_client):
         "/api/chat/stream",
         data={
             "conversation_id": str(conv_id),
-            "model": "gpt-4o-mini",
+            "model": "openai:gpt-4o-mini",
             "content": "解析这个文档",
             "files": [(buffer, "📊 平台奖励政策与结算执行总表.docx")],
         },
@@ -88,7 +88,7 @@ def test_message_image_preview_url_and_order(logged_in_client):
         "/api/chat/stream",
         data={
             "conversation_id": str(conv_id),
-            "model": "gpt-4o-mini",
+            "model": "openai:gpt-4o-mini",
             "content": "按顺序看图",
             "files": [
                 (io.BytesIO(PNG_1X1_BYTES), "first.png"),
@@ -113,3 +113,39 @@ def test_message_image_preview_url_and_order(logged_in_client):
     preview_resp = logged_in_client.get(attachments[0]["preview_url"])
     assert preview_resp.status_code == 200
     assert preview_resp.mimetype.startswith("image/")
+
+
+def test_google_chat_stream_uses_google_client(app_builder):
+    app = app_builder(
+        openai_env_text="OPENAI_BASE_URL=\nOPENAI_API_KEY=\nOPENAI_MODELS=\n",
+        google_env_text="GOOGLE_API_KEY=google-test-key\nGOOGLE_MODELS=gemini-2.0-flash\n",
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.0-flash"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.0-flash",
+            "content": "你好，Gemini",
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert '"type": "delta"' in body
+    assert '"type": "done"' in body
+
+    seen = app.extensions["seen_google_requests"]
+    assert seen
+    assert seen[0]["model"] == "gemini-2.0-flash"

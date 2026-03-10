@@ -33,7 +33,8 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert file_ids == [
         "auth_users",
         "env_app",
-        "env_ai",
+        "env_openai",
+        "env_google",
         "env_storage",
         "env_attachments",
         "env_logging",
@@ -64,28 +65,28 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     persisted_auth = json.loads(auth_file.read_text(encoding="utf-8"))
     assert any(item["username"] == "ops" for item in persisted_auth["users"])
 
-    ai_config_resp = admin_client.get("/api/admin/config-files/env_ai")
+    ai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
     assert ai_config_resp.status_code == 200
     ai_config_data = ai_config_resp.get_json()
     assert ai_config_data["requires_restart"] is True
-    assert "AI_BASE_URL=https://example.invalid/v1" in ai_config_data["content"]
+    assert "OPENAI_BASE_URL=https://example.invalid/v1" in ai_config_data["content"]
 
     save_ai_resp = admin_client.put(
-        "/api/admin/config-files/env_ai",
+        "/api/admin/config-files/env_openai",
         json={
             "content": (
-                "AI_BASE_URL=https://new.example/v1\n"
-                "AI_API_KEY=new-key\n"
-                "AI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
+                "OPENAI_BASE_URL=https://new.example/v1\n"
+                "OPENAI_API_KEY=new-key\n"
+                "OPENAI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
             )
         },
     )
     assert save_ai_resp.status_code == 200
     save_ai_data = save_ai_resp.get_json()
     assert set(save_ai_data["hot_reload"]["applied_keys"]) == {
-        "AI_API_KEY",
-        "AI_BASE_URL",
-        "AI_MODELS",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_MODELS",
     }
     assert save_ai_data["hot_reload"]["restart_required_keys"] == []
 
@@ -129,23 +130,24 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
 
     env_files = app.config["ENV_FILES"]
     ai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
-    attachments_env_text = Path(env_files[3]).read_text(encoding="utf-8")
-    logging_env_text = Path(env_files[4]).read_text(encoding="utf-8")
-    assert "AI_BASE_URL=https://new.example/v1" in ai_env_text
+    attachments_env_text = Path(env_files[4]).read_text(encoding="utf-8")
+    logging_env_text = Path(env_files[5]).read_text(encoding="utf-8")
+    assert "OPENAI_BASE_URL=https://new.example/v1" in ai_env_text
     assert "MAX_UPLOAD_MB=8" in attachments_env_text
     assert "LOG_LEVEL=INFO" in logging_env_text
 
     runtime_settings = app.extensions["runtime_state"].settings
-    assert runtime_settings.ai_base_url == "https://new.example/v1"
-    assert runtime_settings.ai_api_key == "new-key"
-    assert runtime_settings.models == ["gpt-4o-mini", "gpt-4.1-mini"]
+    assert runtime_settings.openai_base_url == "https://new.example/v1"
+    assert runtime_settings.openai_api_key == "new-key"
+    assert runtime_settings.openai_models == ["gpt-4o-mini", "gpt-4.1-mini"]
+    assert runtime_settings.models == ["openai:gpt-4o-mini", "openai:gpt-4.1-mini"]
     assert runtime_settings.max_upload_mb == 8
     assert runtime_settings.max_upload_bytes == 8 * 1024 * 1024
     assert runtime_settings.max_attachments_per_message == 3
     assert runtime_settings.max_text_file_chars == 4096
     assert runtime_settings.allowed_attachment_exts == {".docx", ".png"}
 
-    create_conv_resp = admin_client.post("/api/conversations", json={"model": "gpt-4.1-mini"})
+    create_conv_resp = admin_client.post("/api/conversations", json={"model": "openai:gpt-4.1-mini"})
     assert create_conv_resp.status_code == 201
 
     chat_page_resp = admin_client.get("/chat")

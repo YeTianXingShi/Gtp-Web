@@ -3,14 +3,14 @@
 简化版多用户 AI Chat Web：
 
 - 预置账号登录（账号与管理员权限来自 JSON 配置）
-- 固定模型列表（服务端配置，前端只可选择）
+- 固定模型列表（服务端配置，前端按来源分组选项）
 - 聊天记录持久化在后端 SQLite（按账号隔离）
 - 流式输出（SSE）
 - 会话搜索（按标题与消息内容）
 - 会话删除、导出（JSON/TXT）与重命名
 - 支持图片与文件输入（图片 + 常见文本文件 + Word/Excel 解析）
 - 内置后台管理（管理员可管理用户与多个配置文件）
-- 转发到你预先配置好的 AI 服务（OpenAI 兼容 `chat.completions`）
+- 同时支持 OpenAI/OpenAI 兼容接口 与 Google Gemini 官方 `google-genai` SDK
 
 ## 0. 后端结构
 
@@ -24,7 +24,8 @@
 - `gtpweb/config.py`: 环境配置与模型/账号加载
 - `gtpweb/db.py`: SQLite 连接与建表
 - `gtpweb/attachments.py`: 附件校验与文档解析
-- `gtpweb/openai_stream.py`: SSE 与上游错误解析
+- `gtpweb/openai_stream.py`: SSE 与 OpenAI 兼容错误解析
+- `gtpweb/ai_providers.py`: 多来源模型注册与 Gemini 请求转换
 - `gtpweb/utils.py`: 通用工具函数
 
 ## 1. 安装
@@ -50,10 +51,13 @@ cp config/users.example.json config/users.json
   - `USERS_FILE`: 用户配置文件路径
   - `PORT`: Web 服务端口
   - `FLASK_DEBUG`: 调试开关
-- `config/env/ai.env`
-  - `AI_BASE_URL`: 你的 AI API 根地址，例如 `https://api.openai.com/v1`
-  - `AI_API_KEY`: 你的服务密钥
-  - `AI_MODELS`: 固定模型列表，逗号分隔
+- `config/env/openai.env`
+  - `OPENAI_BASE_URL`: OpenAI 或兼容网关 API 根地址，例如 `https://api.openai.com/v1`
+  - `OPENAI_API_KEY`: OpenAI 或兼容服务密钥
+  - `OPENAI_MODELS`: OpenAI 来源模型列表，逗号分隔
+- `config/env/google.env`
+  - `GOOGLE_API_KEY`: Gemini API Key
+  - `GOOGLE_MODELS`: Gemini 模型列表，逗号分隔
 - `config/env/storage.env`
   - `CHAT_DB_FILE`: 聊天记录数据库文件路径（默认 `./data/chat.db`）
   - `UPLOAD_DIR`: 附件存储目录（默认 `./data/uploads`）
@@ -71,6 +75,12 @@ cp config/users.example.json config/users.json
 - `config/users.json`
   - 预置登录账号、密码和管理员权限
   - 推荐结构：`{"users":[{"username":"admin","password":"...","is_admin":true}]}`
+
+补充说明：
+
+- 启动时仍兼容旧版 `config/env/ai.env` 里的 `AI_*` 配置，方便平滑迁移。
+- 后台管理页现在会将 OpenAI 与 Google Gemini 分成两个独立配置分组展示。
+- 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
 
 ## 3. 启动
 
@@ -95,7 +105,7 @@ pytest
 ## 5. 后台管理
 
 - 管理员账号同样存放在 `config/users.json`，通过 `is_admin: true` 标识。
-- 管理员登录后默认进入 `/admin`，可管理用户账号，并切换编辑 `config/users.json` 与环境配置文件。
+- 管理员登录后默认进入 `/admin`，可切换编辑 `config/users.json` 与各分组环境配置文件。
 - `config/users.json` 保存后立即生效；如果当前管理员在配置中被移除或取消管理员权限，系统会拒绝保存。
 - 推荐使用 `config/env/*.env` 分组维护环境变量；系统会按固定分组分别展示与保存。
 - 环境变量文件保存后会立即写盘，并自动热更新支持的运行项；结构性配置仍按提示决定是否重启。
@@ -112,12 +122,16 @@ pytest
 - 接入 SQLite + 密码哈希
 - 增加审计日志与配置变更历史
 - 增加导出 PDF/Markdown、批量导出
+- 增加更多 AI 来源（Anthropic、Azure OpenAI 等）
 
 ## 8. 常见报错排查
 
 - 前端提示 `<!DOCTYPE html>...`：
   - 说明上游返回了 HTML 错误页，不是模型 JSON。
-  - 先检查 `AI_BASE_URL` 是否为网关 API 根地址（通常以 `/v1` 结尾）。
+  - OpenAI 兼容来源先检查 `OPENAI_BASE_URL` 是否为网关 API 根地址（通常以 `/v1` 结尾）。
+- Gemini 调用失败：
+  - 先确认 `GOOGLE_API_KEY` 有效，且模型名称在 `GOOGLE_MODELS` 中配置正确。
+  - 再确认当前 Python 环境已安装 `google-genai`。
 - 查看请求追踪日志：
   - 每个请求都有 `rid=<request_id>`，响应头同步返回 `X-Request-ID`。
   - 可按 `rid` 串联排查认证、会话、聊天流与上游调用日志。

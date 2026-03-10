@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from typing import Any
 
 from flask import Flask
 from openai import OpenAI
@@ -13,6 +14,20 @@ from .logging_config import configure_logging, register_request_logging
 from .runtime_state import create_runtime_state
 
 logger = logging.getLogger(__name__)
+
+
+def build_openai_client(**kwargs: Any) -> OpenAI:
+    return OpenAI(**kwargs)
+
+
+def build_google_client(**kwargs: Any) -> Any:
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError(
+            "当前环境缺少 `google-genai` 依赖，请先执行 `pip install -r requirements.txt`。"
+        ) from exc
+    return genai.Client(**kwargs)
 
 
 def create_app() -> Flask:
@@ -44,14 +59,20 @@ def create_app() -> Flask:
     config.upload_dir.mkdir(parents=True, exist_ok=True)
     logger.info("应用启动: 上传目录已就绪 路径=%s", config.upload_dir)
 
-    openai_client_factory = lambda **kwargs: OpenAI(**kwargs)
+    openai_client_factory = build_openai_client
+    google_client_factory = build_google_client
     app.extensions["openai_client_factory"] = openai_client_factory
+    app.extensions["google_client_factory"] = google_client_factory
     app.extensions["runtime_base_config"] = config
-    app.extensions["runtime_state"] = create_runtime_state(config, openai_client_factory)
+    app.extensions["runtime_state"] = create_runtime_state(
+        config,
+        openai_client_factory,
+        google_client_factory,
+    )
     logger.info(
-        "应用启动: 运行时配置初始化完成 base_url=%s 模型=%s",
-        app.extensions["runtime_state"].settings.ai_base_url,
-        ",".join(app.extensions["runtime_state"].settings.models),
+        "应用启动: 运行时配置初始化完成 OpenAI模型=%s Google模型=%s",
+        ",".join(app.extensions["runtime_state"].settings.openai_models),
+        ",".join(app.extensions["runtime_state"].settings.google_models),
     )
 
     register_request_logging(app)

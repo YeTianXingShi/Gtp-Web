@@ -29,9 +29,31 @@ class _FakeOpenAI:
         self.chat = _FakeChat(seen_requests)
 
 
+class _FakeGoogleChunk:
+    def __init__(self, text: str):
+        self.text = text
+
+
+class _FakeGoogleModels:
+    def __init__(self, seen_requests: list[dict]):
+        self._seen_requests = seen_requests
+
+    def generate_content_stream(self, **kwargs):
+        self._seen_requests.append(kwargs)
+        return [_FakeGoogleChunk("ok")]
+
+
+class _FakeGoogleClient:
+    def __init__(self, seen_requests: list[dict], **_kwargs):
+        self.models = _FakeGoogleModels(seen_requests)
+
+
 def _create_test_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    *,
+    openai_env_text: str | None = None,
+    google_env_text: str | None = None,
 ):
     users_file = tmp_path / "users.json"
     users_file.write_text(
@@ -40,14 +62,32 @@ def _create_test_app(
     )
 
     monkeypatch.delenv("ENV_DIR", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_MODELS", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_MODELS", raising=False)
+    monkeypatch.delenv("AI_BASE_URL", raising=False)
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.delenv("AI_MODELS", raising=False)
+
     env_dir = tmp_path / "env"
     env_dir.mkdir(parents=True, exist_ok=True)
     (env_dir / "app.env").write_text(
         "APP_SECRET_KEY=test-secret\nPORT=8000\nFLASK_DEBUG=1\n",
         encoding="utf-8",
     )
-    (env_dir / "ai.env").write_text(
-        "AI_BASE_URL=https://example.invalid/v1\nAI_API_KEY=test-key\nAI_MODELS=gpt-4o-mini\n",
+    (env_dir / "openai.env").write_text(
+        openai_env_text
+        or (
+            "OPENAI_BASE_URL=https://example.invalid/v1\n"
+            "OPENAI_API_KEY=test-key\n"
+            "OPENAI_MODELS=gpt-4o-mini\n"
+        ),
+        encoding="utf-8",
+    )
+    (env_dir / "google.env").write_text(
+        google_env_text or "GOOGLE_API_KEY=\nGOOGLE_MODELS=\n",
         encoding="utf-8",
     )
     (env_dir / "storage.env").write_text(
@@ -67,9 +107,6 @@ def _create_test_app(
     monkeypatch.setenv("USERS_FILE", str(users_file))
     monkeypatch.setenv("CHAT_DB_FILE", str(tmp_path / "chat.db"))
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
-    monkeypatch.setenv("AI_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("AI_API_KEY", "test-key")
-    monkeypatch.setenv("AI_MODELS", "gpt-4o-mini")
     monkeypatch.setenv(
         "ALLOWED_ATTACHMENT_EXTS",
         ".txt,.md,.json,.csv,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx",
@@ -77,22 +114,36 @@ def _create_test_app(
 
     from gtpweb import app_factory
 
-    seen_requests: list[dict] = []
+    seen_openai_requests: list[dict] = []
+    seen_google_requests: list[dict] = []
 
     def _build_fake_openai(**kwargs):
-        return _FakeOpenAI(seen_requests=seen_requests, **kwargs)
+        return _FakeOpenAI(seen_requests=seen_openai_requests, **kwargs)
 
-    monkeypatch.setattr(app_factory, "OpenAI", _build_fake_openai)
+    def _build_fake_google(**kwargs):
+        return _FakeGoogleClient(seen_requests=seen_google_requests, **kwargs)
+
+    monkeypatch.setattr(app_factory, "build_openai_client", _build_fake_openai)
+    monkeypatch.setattr(app_factory, "build_google_client", _build_fake_google)
 
     flask_app = app_factory.create_app()
     flask_app.config.update(TESTING=True)
-    flask_app.extensions["seen_openai_requests"] = seen_requests
+    flask_app.extensions["seen_openai_requests"] = seen_openai_requests
+    flask_app.extensions["seen_google_requests"] = seen_google_requests
     return flask_app
 
 
 @pytest.fixture()
 def app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return _create_test_app(monkeypatch, tmp_path)
+
+
+@pytest.fixture()
+def app_builder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def _build(**kwargs):
+        return _create_test_app(monkeypatch, tmp_path, **kwargs)
+
+    return _build
 
 
 @pytest.fixture()

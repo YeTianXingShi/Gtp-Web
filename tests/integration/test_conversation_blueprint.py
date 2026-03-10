@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_conversation_crud(logged_in_client):
-    create_resp = logged_in_client.post("/api/conversations", json={"model": "gpt-4o-mini"})
+    create_resp = logged_in_client.post("/api/conversations", json={"model": "openai:gpt-4o-mini"})
     assert create_resp.status_code == 201
     conv_id = create_resp.get_json()["conversation"]["id"]
 

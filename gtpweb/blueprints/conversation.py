@@ -7,6 +7,7 @@ from typing import Any
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
 
+from gtpweb.ai_providers import normalize_model_selection, resolve_model_option
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
 from gtpweb.runtime_state import get_runtime_state
@@ -26,6 +27,16 @@ def _get_current_user(users_file: Path) -> str | None:
     return str(record["username"])
 
 
+def _serialize_conversation_row(row: Any, normalized_model: str) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "model": normalized_model,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def create_conversation_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("conversation", __name__)
 
@@ -38,6 +49,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
         query = str(request.args.get("q", "")).strip()
+        runtime_settings = get_runtime_state().settings
         logger.info("会话列表查询: 用户=%s 关键词长度=%s", username, len(query))
 
         with open_db_connection(db_file) as conn:
@@ -73,13 +85,14 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 ).fetchall()
 
         conversations = [
-            {
-                "id": row["id"],
-                "title": row["title"],
-                "model": row["model"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
+            _serialize_conversation_row(
+                row,
+                normalize_model_selection(
+                    str(row["model"]),
+                    runtime_settings.model_options,
+                    fallback_to_first=True,
+                ),
+            )
             for row in rows
         ]
         logger.info("会话列表查询完成: 用户=%s 会话数=%s", username, len(conversations))
@@ -162,16 +175,18 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             ).fetchone()
         logger.info("重命名会话完成: 用户=%s 会话ID=%s 新标题=%s", username, conversation_id, updated["title"])
 
+        runtime_settings = get_runtime_state().settings
         return jsonify(
             {
                 "ok": True,
-                "conversation": {
-                    "id": updated["id"],
-                    "title": updated["title"],
-                    "model": updated["model"],
-                    "created_at": updated["created_at"],
-                    "updated_at": updated["updated_at"],
-                },
+                "conversation": _serialize_conversation_row(
+                    updated,
+                    normalize_model_selection(
+                        str(updated["model"]),
+                        runtime_settings.model_options,
+                        fallback_to_first=True,
+                    ),
+                ),
             }
         )
 
@@ -182,12 +197,12 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 
         runtime_settings = get_runtime_state().settings
-        models = runtime_settings.models
 
         payload = request.get_json(silent=True) or {}
-        model = str(payload.get("model", models[0])).strip() or models[0]
-        logger.info("创建会话请求: 用户=%s 模型=%s", username, model)
-        if model not in models:
+        requested_model = str(payload.get("model", runtime_settings.models[0])).strip() or runtime_settings.models[0]
+        model_option = resolve_model_option(requested_model, runtime_settings.model_options)
+        logger.info("创建会话请求: 用户=%s 模型=%s", username, requested_model)
+        if model_option is None:
             return jsonify({"ok": False, "error": "无效的模型"}), 400
 
         title = str(payload.get("title", "新对话")).strip() or "新对话"
@@ -197,7 +212,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 INSERT INTO conversations (username, title, model)
                 VALUES (?, ?, ?)
                 """,
-                (username, title[:60], model),
+                (username, title[:60], model_option.id),
             )
             conversation_id = cursor.lastrowid
             conn.commit()
@@ -216,13 +231,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             jsonify(
                 {
                     "ok": True,
-                    "conversation": {
-                        "id": row["id"],
-                        "title": row["title"],
-                        "model": row["model"],
-                        "created_at": row["created_at"],
-                        "updated_at": row["updated_at"],
-                    },
+                    "conversation": _serialize_conversation_row(row, model_option.id),
                 }
             ),
             201,
@@ -305,7 +314,18 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             conversation_id,
             len(messages),
         )
-        return jsonify({"ok": True, "model": conv["model"], "messages": messages})
+        runtime_settings = get_runtime_state().settings
+        return jsonify(
+            {
+                "ok": True,
+                "model": normalize_model_selection(
+                    str(conv["model"]),
+                    runtime_settings.model_options,
+                    fallback_to_first=True,
+                ),
+                "messages": messages,
+            }
+        )
 
     @bp.get("/api/attachments/<int:attachment_id>/content")
     def get_attachment_content(attachment_id: int) -> Response:

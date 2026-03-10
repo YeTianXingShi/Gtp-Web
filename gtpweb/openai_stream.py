@@ -72,7 +72,7 @@ def summarize_non_json_error(body_text: str) -> str:
         if match:
             title = " ".join(match.group(1).split())[:120]
             return f"上游返回 HTML 页面: {title}"
-        return "上游返回 HTML 页面，通常是 AI_BASE_URL 配置错误或被网关拦截。"
+        return "上游返回 HTML 页面，通常是 OPENAI_BASE_URL 配置错误或被网关拦截。"
 
     return raw[:300]
 

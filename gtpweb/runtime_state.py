@@ -18,6 +18,7 @@ HOT_RELOADABLE_ENV_KEYS = {
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_MODELS",
+    "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
     "GOOGLE_MODELS",
     "MAX_UPLOAD_MB",
@@ -32,6 +33,7 @@ class RuntimeSettings:
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
+    google_base_url: str
     google_api_key: str
     google_models: list[str]
     models: list[str]
@@ -51,6 +53,7 @@ class RuntimeState:
     google_client: Any | None
 
 
+
 def _normalize_env_values(raw_values: dict[str, Any]) -> dict[str, str]:
     normalized: dict[str, str] = {}
     for key, value in raw_values.items():
@@ -60,10 +63,12 @@ def _normalize_env_values(raw_values: dict[str, Any]) -> dict[str, str]:
     return normalized
 
 
+
 def read_env_file_values(env_file: Path) -> dict[str, str]:
     if not env_file.exists():
         return {}
     return _normalize_env_values(dotenv_values(env_file))
+
 
 
 def read_env_files_values(env_files: tuple[Path, ...]) -> dict[str, str]:
@@ -73,8 +78,10 @@ def read_env_files_values(env_files: tuple[Path, ...]) -> dict[str, str]:
     return merged_values
 
 
+
 def parse_env_text(raw_text: str) -> dict[str, str]:
     return _normalize_env_values(dotenv_values(stream=StringIO(raw_text)))
+
 
 
 def build_runtime_settings(
@@ -111,6 +118,7 @@ def build_runtime_settings(
     openai_base_url = choose_text("OPENAI_BASE_URL", base_config.openai_base_url, allow_empty=True)
     openai_api_key = choose_text("OPENAI_API_KEY", base_config.openai_api_key, allow_empty=True)
     openai_models = choose_models("OPENAI_MODELS", base_config.openai_models)
+    google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = choose_models("GOOGLE_MODELS", base_config.google_models)
 
@@ -135,6 +143,7 @@ def build_runtime_settings(
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
+        google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
         models=models,
@@ -145,6 +154,7 @@ def build_runtime_settings(
         max_text_file_chars=max_text_file_chars,
         allowed_attachment_exts=allowed_attachment_exts,
     )
+
 
 
 def _build_openai_client(
@@ -159,13 +169,18 @@ def _build_openai_client(
     )
 
 
+
 def _build_google_client(
     settings: RuntimeSettings,
     google_client_factory: Callable[..., Any],
 ) -> Any | None:
     if not settings.google_models:
         return None
-    return google_client_factory(api_key=settings.google_api_key)
+    return google_client_factory(
+        api_key=settings.google_api_key,
+        base_url=settings.google_base_url,
+    )
+
 
 
 def create_runtime_state(
@@ -183,8 +198,10 @@ def create_runtime_state(
     )
 
 
+
 def get_runtime_state() -> RuntimeState:
     return current_app.extensions["runtime_state"]
+
 
 
 def apply_runtime_env_values(
@@ -217,7 +234,8 @@ def apply_runtime_env_values(
         runtime_state.openai_client = _build_openai_client(new_settings, openai_client_factory)
 
     if (
-        old_settings.google_api_key != new_settings.google_api_key
+        old_settings.google_base_url != new_settings.google_base_url
+        or old_settings.google_api_key != new_settings.google_api_key
         or old_settings.google_models != new_settings.google_models
     ):
         google_client_factory = app.extensions["google_client_factory"]

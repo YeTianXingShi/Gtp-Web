@@ -56,6 +56,7 @@ cp config/users.example.json config/users.json
   - `OPENAI_API_KEY`: OpenAI 或兼容服务密钥
   - `OPENAI_MODELS`: OpenAI 来源模型列表，逗号分隔
 - `config/env/google.env`
+  - `GOOGLE_BASE_URL`: Gemini API 根地址；留空时使用官方默认地址
   - `GOOGLE_API_KEY`: Gemini API Key
   - `GOOGLE_MODELS`: Gemini 模型列表，逗号分隔
 - `config/env/storage.env`
@@ -78,7 +79,7 @@ cp config/users.example.json config/users.json
 
 补充说明：
 
-- 启动时仍兼容旧版 `config/env/ai.env` 里的 `AI_*` 配置，方便平滑迁移。
+- 已不再读取旧版 `config/env/ai.env` 与 `AI_*` 变量；请统一迁移到 `openai.env` 与 `google.env`。
 - 后台管理页现在会将 OpenAI 与 Google Gemini 分成两个独立配置分组展示。
 - 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
 
@@ -131,6 +132,7 @@ pytest
   - OpenAI 兼容来源先检查 `OPENAI_BASE_URL` 是否为网关 API 根地址（通常以 `/v1` 结尾）。
 - Gemini 调用失败：
   - 先确认 `GOOGLE_API_KEY` 有效，且模型名称在 `GOOGLE_MODELS` 中配置正确。
+  - 如果走代理或网关，再检查 `GOOGLE_BASE_URL` 是否填写正确。
   - 再确认当前 Python 环境已安装 `google-genai`。
 - 查看请求追踪日志：
   - 每个请求都有 `rid=<request_id>`，响应头同步返回 `X-Request-ID`。

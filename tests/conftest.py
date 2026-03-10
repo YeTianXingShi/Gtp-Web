@@ -48,6 +48,7 @@ class _FakeGoogleClient:
         self.models = _FakeGoogleModels(seen_requests)
 
 
+
 def _create_test_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -65,11 +66,9 @@ def _create_test_app(
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_MODELS", raising=False)
+    monkeypatch.delenv("GOOGLE_BASE_URL", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_MODELS", raising=False)
-    monkeypatch.delenv("AI_BASE_URL", raising=False)
-    monkeypatch.delenv("AI_API_KEY", raising=False)
-    monkeypatch.delenv("AI_MODELS", raising=False)
 
     env_dir = tmp_path / "env"
     env_dir.mkdir(parents=True, exist_ok=True)
@@ -87,7 +86,7 @@ def _create_test_app(
         encoding="utf-8",
     )
     (env_dir / "google.env").write_text(
-        google_env_text or "GOOGLE_API_KEY=\nGOOGLE_MODELS=\n",
+        google_env_text or "GOOGLE_BASE_URL=\nGOOGLE_API_KEY=\nGOOGLE_MODELS=\n",
         encoding="utf-8",
     )
     (env_dir / "storage.env").write_text(
@@ -116,11 +115,13 @@ def _create_test_app(
 
     seen_openai_requests: list[dict] = []
     seen_google_requests: list[dict] = []
+    seen_google_client_kwargs: list[dict] = []
 
     def _build_fake_openai(**kwargs):
         return _FakeOpenAI(seen_requests=seen_openai_requests, **kwargs)
 
     def _build_fake_google(**kwargs):
+        seen_google_client_kwargs.append(dict(kwargs))
         return _FakeGoogleClient(seen_requests=seen_google_requests, **kwargs)
 
     monkeypatch.setattr(app_factory, "build_openai_client", _build_fake_openai)
@@ -130,6 +131,7 @@ def _create_test_app(
     flask_app.config.update(TESTING=True)
     flask_app.extensions["seen_openai_requests"] = seen_openai_requests
     flask_app.extensions["seen_google_requests"] = seen_google_requests
+    flask_app.extensions["seen_google_client_kwargs"] = seen_google_client_kwargs
     return flask_app
 
 

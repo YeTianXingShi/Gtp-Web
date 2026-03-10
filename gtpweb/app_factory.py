@@ -16,18 +16,26 @@ from .runtime_state import create_runtime_state
 logger = logging.getLogger(__name__)
 
 
+
 def build_openai_client(**kwargs: Any) -> OpenAI:
     return OpenAI(**kwargs)
 
 
-def build_google_client(**kwargs: Any) -> Any:
+
+def build_google_client(*, api_key: str, base_url: str = "") -> Any:
     try:
         from google import genai
+        from google.genai import types
     except ImportError as exc:
         raise RuntimeError(
             "当前环境缺少 `google-genai` 依赖，请先执行 `pip install -r requirements.txt`。"
         ) from exc
-    return genai.Client(**kwargs)
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        client_kwargs["http_options"] = types.HttpOptions(base_url=base_url)
+    return genai.Client(**client_kwargs)
+
 
 
 def create_app() -> Flask:

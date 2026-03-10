@@ -11,10 +11,12 @@ PNG_1X1_BYTES = (
 )
 
 
+
 def _create_conversation(client) -> int:
     resp = client.post("/api/conversations", json={"model": "openai:gpt-4o-mini"})
     assert resp.status_code == 201
     return int(resp.get_json()["conversation"]["id"])
+
 
 
 def test_chat_stream_with_text_attachment(logged_in_client, app):
@@ -39,6 +41,7 @@ def test_chat_stream_with_text_attachment(logged_in_client, app):
     assert seen
 
 
+
 def test_chat_stream_rejects_non_whitelist_extension(logged_in_client):
     conv_id = _create_conversation(logged_in_client)
 
@@ -56,6 +59,7 @@ def test_chat_stream_rejects_non_whitelist_extension(logged_in_client):
     data = resp.get_json()
     assert data["ok"] is False
     assert "不支持的文件类型" in data["error"]
+
 
 
 def test_chat_stream_accepts_unicode_docx_filename(logged_in_client):
@@ -79,6 +83,7 @@ def test_chat_stream_accepts_unicode_docx_filename(logged_in_client):
     )
     assert resp.status_code == 200, resp.get_data(as_text=True)
     _ = resp.get_data(as_text=True)
+
 
 
 def test_message_image_preview_url_and_order(logged_in_client):
@@ -115,10 +120,15 @@ def test_message_image_preview_url_and_order(logged_in_client):
     assert preview_resp.mimetype.startswith("image/")
 
 
-def test_google_chat_stream_uses_google_client(app_builder):
+
+def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     app = app_builder(
         openai_env_text="OPENAI_BASE_URL=\nOPENAI_API_KEY=\nOPENAI_MODELS=\n",
-        google_env_text="GOOGLE_API_KEY=google-test-key\nGOOGLE_MODELS=gemini-2.0-flash\n",
+        google_env_text=(
+            "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+            "GOOGLE_MODELS=gemini-2.0-flash\n"
+        ),
     )
     client = app.test_client()
 
@@ -146,6 +156,11 @@ def test_google_chat_stream_uses_google_client(app_builder):
     assert '"type": "delta"' in body
     assert '"type": "done"' in body
 
-    seen = app.extensions["seen_google_requests"]
-    assert seen
-    assert seen[0]["model"] == "gemini-2.0-flash"
+    seen_requests = app.extensions["seen_google_requests"]
+    assert seen_requests
+    assert seen_requests[0]["model"] == "gemini-2.0-flash"
+
+    seen_client_kwargs = app.extensions["seen_google_client_kwargs"]
+    assert seen_client_kwargs
+    assert seen_client_kwargs[0]["api_key"] == "google-test-key"
+    assert seen_client_kwargs[0]["base_url"] == "https://gemini-proxy.example"

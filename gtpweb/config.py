@@ -17,7 +17,6 @@ DEFAULT_USERS_FILE = BASE_DIR / "config" / "users.json"
 DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
 DEFAULT_UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 DEFAULT_LOG_FILE = BASE_DIR / "logs" / "app.log"
-LEGACY_AI_ENV_FILENAME = "ai.env"
 
 
 @dataclass(frozen=True)
@@ -45,7 +44,7 @@ ENV_GROUP_SPECS = (
         key="google",
         filename="google.env",
         label="Google Gemini 配置",
-        description="维护 GOOGLE_API_KEY 与 GOOGLE_MODELS。",
+        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY 与 GOOGLE_MODELS。",
     ),
     EnvGroupSpec(
         key="storage",
@@ -78,6 +77,7 @@ class AppConfig:
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
+    google_base_url: str
     google_api_key: str
     google_models: list[str]
     db_file: Path
@@ -100,11 +100,13 @@ def load_users(users_file: Path) -> dict[str, str]:
     return load_user_password_map(users_file)
 
 
+
 def parse_models(raw_models: str, *, allow_empty: bool = False) -> list[str]:
     models = [item.strip() for item in raw_models.split(",") if item.strip()]
     if not models and not allow_empty:
         raise ValueError("至少需要配置一个模型。")
     return models
+
 
 
 def parse_bool(raw_value: str, default: bool) -> bool:
@@ -118,16 +120,10 @@ def parse_bool(raw_value: str, default: bool) -> bool:
     return default
 
 
+
 def build_grouped_env_files(env_dir: Path) -> tuple[Path, ...]:
     return tuple(env_dir / item.filename for item in ENV_GROUP_SPECS)
 
-
-def build_startup_env_files(env_dir: Path) -> tuple[Path, ...]:
-    legacy_ai_env_file = env_dir / LEGACY_AI_ENV_FILENAME
-    grouped_env_files = build_grouped_env_files(env_dir)
-    if legacy_ai_env_file.exists():
-        return (legacy_ai_env_file, *grouped_env_files)
-    return grouped_env_files
 
 
 def resolve_env_dir() -> Path:
@@ -137,32 +133,29 @@ def resolve_env_dir() -> Path:
     return env_dir
 
 
+
 def load_env_files(env_files: tuple[Path, ...]) -> None:
     for env_file in env_files:
         if env_file.exists():
             load_dotenv(env_file, override=False)
 
 
+
 def load_config() -> AppConfig:
     env_dir = resolve_env_dir()
     env_files = build_grouped_env_files(env_dir)
-    load_env_files(build_startup_env_files(env_dir))
+    load_env_files(env_files)
 
     users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
     users = load_users(users_file)
 
-    openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip() or os.getenv("AI_BASE_URL", "").strip()
-    openai_api_key = os.getenv("OPENAI_API_KEY", "") or os.getenv("AI_API_KEY", "")
-    openai_models_raw = os.getenv("OPENAI_MODELS")
-    if openai_models_raw is None:
-        openai_models_raw = os.getenv("AI_MODELS", "")
-    openai_models = parse_models(openai_models_raw or "", allow_empty=True)
+    openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip()
+    openai_api_key = os.getenv("OPENAI_API_KEY", "")
+    openai_models = parse_models(os.getenv("OPENAI_MODELS", ""), allow_empty=True)
 
-    google_api_key = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-    google_models_raw = os.getenv("GOOGLE_MODELS")
-    if google_models_raw is None:
-        google_models_raw = os.getenv("GEMINI_MODELS", "")
-    google_models = parse_models(google_models_raw or "", allow_empty=True)
+    google_base_url = os.getenv("GOOGLE_BASE_URL", "").strip()
+    google_api_key = os.getenv("GOOGLE_API_KEY", "")
+    google_models = parse_models(os.getenv("GOOGLE_MODELS", ""), allow_empty=True)
 
     db_file = Path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
     upload_dir = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
@@ -196,6 +189,7 @@ def load_config() -> AppConfig:
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
+        google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
         db_file=db_file,

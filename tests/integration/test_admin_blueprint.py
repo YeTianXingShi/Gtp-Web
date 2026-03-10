@@ -4,10 +4,12 @@ import json
 from pathlib import Path
 
 
+
 def test_admin_page_requires_admin(logged_in_client):
     resp = logged_in_client.get("/admin", follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["Location"].endswith("/chat")
+
 
 
 def test_admin_api_requires_admin(logged_in_client):
@@ -15,6 +17,7 @@ def test_admin_api_requires_admin(logged_in_client):
     assert resp.status_code == 403
     data = resp.get_json()
     assert data["ok"] is False
+
 
 
 def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
@@ -65,13 +68,13 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     persisted_auth = json.loads(auth_file.read_text(encoding="utf-8"))
     assert any(item["username"] == "ops" for item in persisted_auth["users"])
 
-    ai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
-    assert ai_config_resp.status_code == 200
-    ai_config_data = ai_config_resp.get_json()
-    assert ai_config_data["requires_restart"] is True
-    assert "OPENAI_BASE_URL=https://example.invalid/v1" in ai_config_data["content"]
+    openai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
+    assert openai_config_resp.status_code == 200
+    openai_config_data = openai_config_resp.get_json()
+    assert openai_config_data["requires_restart"] is True
+    assert "OPENAI_BASE_URL=https://example.invalid/v1" in openai_config_data["content"]
 
-    save_ai_resp = admin_client.put(
+    save_openai_resp = admin_client.put(
         "/api/admin/config-files/env_openai",
         json={
             "content": (
@@ -81,14 +84,38 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
             )
         },
     )
-    assert save_ai_resp.status_code == 200
-    save_ai_data = save_ai_resp.get_json()
-    assert set(save_ai_data["hot_reload"]["applied_keys"]) == {
+    assert save_openai_resp.status_code == 200
+    save_openai_data = save_openai_resp.get_json()
+    assert set(save_openai_data["hot_reload"]["applied_keys"]) == {
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_MODELS",
     }
-    assert save_ai_data["hot_reload"]["restart_required_keys"] == []
+    assert save_openai_data["hot_reload"]["restart_required_keys"] == []
+
+    google_config_resp = admin_client.get("/api/admin/config-files/env_google")
+    assert google_config_resp.status_code == 200
+    google_config_data = google_config_resp.get_json()
+    assert google_config_data["requires_restart"] is True
+
+    save_google_resp = admin_client.put(
+        "/api/admin/config-files/env_google",
+        json={
+            "content": (
+                "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
+                "GOOGLE_API_KEY=google-new-key\n"
+                "GOOGLE_MODELS=gemini-2.0-flash\n"
+            )
+        },
+    )
+    assert save_google_resp.status_code == 200
+    save_google_data = save_google_resp.get_json()
+    assert set(save_google_data["hot_reload"]["applied_keys"]) == {
+        "GOOGLE_BASE_URL",
+        "GOOGLE_API_KEY",
+        "GOOGLE_MODELS",
+    }
+    assert save_google_data["hot_reload"]["restart_required_keys"] == []
 
     save_attachment_resp = admin_client.put(
         "/api/admin/config-files/env_attachments",
@@ -129,10 +156,12 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert save_logging_data["hot_reload"]["restart_required_keys"] == ["LOG_LEVEL"]
 
     env_files = app.config["ENV_FILES"]
-    ai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
+    openai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
+    google_env_text = Path(env_files[2]).read_text(encoding="utf-8")
     attachments_env_text = Path(env_files[4]).read_text(encoding="utf-8")
     logging_env_text = Path(env_files[5]).read_text(encoding="utf-8")
-    assert "OPENAI_BASE_URL=https://new.example/v1" in ai_env_text
+    assert "OPENAI_BASE_URL=https://new.example/v1" in openai_env_text
+    assert "GOOGLE_BASE_URL=https://gemini-proxy.example" in google_env_text
     assert "MAX_UPLOAD_MB=8" in attachments_env_text
     assert "LOG_LEVEL=INFO" in logging_env_text
 
@@ -140,7 +169,14 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert runtime_settings.openai_base_url == "https://new.example/v1"
     assert runtime_settings.openai_api_key == "new-key"
     assert runtime_settings.openai_models == ["gpt-4o-mini", "gpt-4.1-mini"]
-    assert runtime_settings.models == ["openai:gpt-4o-mini", "openai:gpt-4.1-mini"]
+    assert runtime_settings.google_base_url == "https://gemini-proxy.example"
+    assert runtime_settings.google_api_key == "google-new-key"
+    assert runtime_settings.google_models == ["gemini-2.0-flash"]
+    assert runtime_settings.models == [
+        "openai:gpt-4o-mini",
+        "openai:gpt-4.1-mini",
+        "google:gemini-2.0-flash",
+    ]
     assert runtime_settings.max_upload_mb == 8
     assert runtime_settings.max_upload_bytes == 8 * 1024 * 1024
     assert runtime_settings.max_attachments_per_message == 3
@@ -154,6 +190,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert chat_page_resp.status_code == 200
     chat_page_text = chat_page_resp.get_data(as_text=True)
     assert "gpt-4.1-mini" in chat_page_text
+    assert "gemini-2.0-flash" in chat_page_text
     assert "maxAttachmentsPerMessage: 3" in chat_page_text
     assert "maxUploadMB: 8" in chat_page_text
     assert ".docx" in chat_page_text

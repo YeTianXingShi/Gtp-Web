@@ -40,3 +40,7 @@
 ## Security & Configuration Tips
 - Never commit secrets or local runtime data (`.env`, `config/users.json`, `data/chat.db`).
 - Treat `AI_BASE_URL` as API root (commonly ending in `/v1`) and store credentials only in environment variables.
+
+## Agent Collaboration Rules
+- 所有面向用户的输出文字必须使用中文（包含进度更新、最终回复、说明文档、提交说明等），代码标识符与命令保持原样。
+- 每次完成修改后都需要自动执行一次 Git 提交，提交信息遵循 Conventional Commit 风格并准确描述本次改动。

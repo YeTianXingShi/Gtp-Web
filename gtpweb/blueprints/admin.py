@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 CONFIG_FILE_AUTH_USERS = "auth_users"
-CONFIG_FILE_APP_ENV = "app_env"
 
 
 def _get_current_user_record(users_file: Path) -> dict[str, Any] | None:
@@ -67,27 +66,15 @@ def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
             "format": "json",
         },
     }
-
-    if config.uses_grouped_env:
-        for spec, path in zip(ENV_GROUP_SPECS, config.env_files):
-            config_files[f"env_{spec.key}"] = {
-                "id": f"env_{spec.key}",
-                "label": spec.label,
-                "description": f"{spec.description} 保存后会自动热更新支持的运行项，结构性配置仍需重启。",
-                "path": path,
-                "requires_restart": True,
-                "format": "dotenv",
-            }
-        return config_files
-
-    config_files[CONFIG_FILE_APP_ENV] = {
-            "id": CONFIG_FILE_APP_ENV,
-            "label": "应用环境变量",
-            "description": "编辑 .env 配置。支持自动热更新部分运行项，结构性配置仍需重启。",
-            "path": config.env_file,
+    for spec, path in zip(ENV_GROUP_SPECS, config.env_files):
+        config_files[f"env_{spec.key}"] = {
+            "id": f"env_{spec.key}",
+            "label": spec.label,
+            "description": f"{spec.description} 保存后会自动热更新支持的运行项，结构性配置仍需重启。",
+            "path": path,
             "requires_restart": True,
             "format": "dotenv",
-    }
+        }
     return config_files
 
 

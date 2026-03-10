@@ -9,10 +9,9 @@ set -euo pipefail
 #
 # NOTE:
 # - This script does NOT initialize or modify config files.
-# - Ensure .env or config/env/*.env, and config/users.json already exist before running.
+# - Ensure config/env/*.env and config/users.json already exist before running.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="${ENV_FILE:-${PROJECT_DIR}/.env}"
 ENV_DIR="${ENV_DIR:-${PROJECT_DIR}/config/env}"
 USERS_FILE="${PROJECT_DIR}/config/users.json"
 VENV_DIR="${PROJECT_DIR}/.venv"
@@ -88,8 +87,6 @@ read_env_value() {
         line="${current_line}"
       fi
     done < <(find "${ENV_DIR}" -maxdepth 1 -type f -name '*.env' | sort)
-  elif [[ -f "${ENV_FILE}" ]]; then
-    line="$(grep -E "^${key}=" "${ENV_FILE}" | tail -n 1 || true)"
   fi
 
   if [[ -z "${line}" ]]; then
@@ -124,9 +121,9 @@ if ! python3 -m venv --help >/dev/null 2>&1; then
 fi
 
 echo "[2/5] Checking required config files..."
-if ! has_grouped_env && [[ ! -f "${ENV_FILE}" ]]; then
-  echo "Error: missing ${ENV_FILE} or ${ENV_DIR}/*.env" >&2
-  echo "Please prepare grouped env files or a single .env first, then rerun." >&2
+if ! has_grouped_env; then
+  echo "Error: missing ${ENV_DIR}/*.env" >&2
+  echo "Please prepare grouped env files first, then rerun." >&2
   exit 1
 fi
 if [[ ! -f "${USERS_FILE}" ]]; then

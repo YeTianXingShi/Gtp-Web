@@ -35,9 +35,8 @@ def create_app() -> Flask:
     )
     app.secret_key = config.secret_key
     app.permanent_session_lifetime = timedelta(hours=12)
-    app.config["ENV_FILE"] = str(config.env_file)
+    app.config["ENV_DIR"] = str(config.env_dir)
     app.config["ENV_FILES"] = [str(path) for path in config.env_files]
-    app.config["USES_GROUPED_ENV"] = config.uses_grouped_env
     app.config["USERS_FILE"] = str(config.users_file)
 
     init_db(config.db_file)

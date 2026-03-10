@@ -32,8 +32,6 @@ class _FakeOpenAI:
 def _create_test_app(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-    *,
-    grouped_env: bool,
 ):
     users_file = tmp_path / "users.json"
     users_file.write_text(
@@ -42,38 +40,29 @@ def _create_test_app(
     )
 
     monkeypatch.delenv("ENV_DIR", raising=False)
-    monkeypatch.delenv("ENV_FILE", raising=False)
-    if grouped_env:
-        env_dir = tmp_path / "env"
-        env_dir.mkdir(parents=True, exist_ok=True)
-        (env_dir / "app.env").write_text(
-            "APP_SECRET_KEY=test-secret\nPORT=8000\nFLASK_DEBUG=1\n",
-            encoding="utf-8",
-        )
-        (env_dir / "ai.env").write_text(
-            "AI_BASE_URL=https://example.invalid/v1\nAI_API_KEY=test-key\nAI_MODELS=gpt-4o-mini\n",
-            encoding="utf-8",
-        )
-        (env_dir / "storage.env").write_text(
-            "CHAT_DB_FILE=./data/chat.db\nUPLOAD_DIR=./data/uploads\n",
-            encoding="utf-8",
-        )
-        (env_dir / "attachments.env").write_text(
-            "MAX_UPLOAD_MB=15\nMAX_ATTACHMENTS_PER_MESSAGE=5\nMAX_TEXT_FILE_CHARS=12000\nALLOWED_ATTACHMENT_EXTS=.txt,.md,.json,.csv,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx\n",
-            encoding="utf-8",
-        )
-        (env_dir / "logging.env").write_text(
-            "LOG_LEVEL=DEBUG\nLOG_FILE=./logs/app.log\nLOG_MAX_BYTES=10485760\nLOG_BACKUP_COUNT=5\nLOG_TO_STDOUT=1\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("ENV_DIR", str(env_dir))
-    else:
-        env_file = tmp_path / ".env"
-        env_file.write_text(
-            "AI_BASE_URL=https://example.invalid/v1\nAI_API_KEY=test-key\nAI_MODELS=gpt-4o-mini\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setenv("ENV_FILE", str(env_file))
+    env_dir = tmp_path / "env"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / "app.env").write_text(
+        "APP_SECRET_KEY=test-secret\nPORT=8000\nFLASK_DEBUG=1\n",
+        encoding="utf-8",
+    )
+    (env_dir / "ai.env").write_text(
+        "AI_BASE_URL=https://example.invalid/v1\nAI_API_KEY=test-key\nAI_MODELS=gpt-4o-mini\n",
+        encoding="utf-8",
+    )
+    (env_dir / "storage.env").write_text(
+        "CHAT_DB_FILE=./data/chat.db\nUPLOAD_DIR=./data/uploads\n",
+        encoding="utf-8",
+    )
+    (env_dir / "attachments.env").write_text(
+        "MAX_UPLOAD_MB=15\nMAX_ATTACHMENTS_PER_MESSAGE=5\nMAX_TEXT_FILE_CHARS=12000\nALLOWED_ATTACHMENT_EXTS=.txt,.md,.json,.csv,.png,.jpg,.jpeg,.doc,.docx,.xls,.xlsx\n",
+        encoding="utf-8",
+    )
+    (env_dir / "logging.env").write_text(
+        "LOG_LEVEL=DEBUG\nLOG_FILE=./logs/app.log\nLOG_MAX_BYTES=10485760\nLOG_BACKUP_COUNT=5\nLOG_TO_STDOUT=1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ENV_DIR", str(env_dir))
 
     monkeypatch.setenv("USERS_FILE", str(users_file))
     monkeypatch.setenv("CHAT_DB_FILE", str(tmp_path / "chat.db"))
@@ -103,12 +92,7 @@ def _create_test_app(
 
 @pytest.fixture()
 def app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    return _create_test_app(monkeypatch, tmp_path, grouped_env=False)
-
-
-@pytest.fixture()
-def grouped_env_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    return _create_test_app(monkeypatch, tmp_path, grouped_env=True)
+    return _create_test_app(monkeypatch, tmp_path)
 
 
 @pytest.fixture()
@@ -125,14 +109,6 @@ def logged_in_client(client):
 
 @pytest.fixture()
 def admin_client(client):
-    resp = client.post("/api/login", json={"username": "admin", "password": "admin-pass"})
-    assert resp.status_code == 200
-    return client
-
-
-@pytest.fixture()
-def grouped_admin_client(grouped_env_app):
-    client = grouped_env_app.test_client()
     resp = client.post("/api/login", json={"username": "admin", "password": "admin-pass"})
     assert resp.status_code == 200
     return client

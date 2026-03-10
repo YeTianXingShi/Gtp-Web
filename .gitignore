@@ -2,10 +2,9 @@
 __pycache__/
 .DS_Store
 .idea/
-.env
 config/users.json
+config/env/
 data/*.db
 data/uploads/
 data/app.pid
 logs/
-config/env/

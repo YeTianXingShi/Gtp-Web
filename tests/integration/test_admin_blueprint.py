@@ -10,7 +10,6 @@ def test_admin_page_requires_admin(logged_in_client):
     assert resp.headers["Location"].endswith("/chat")
 
 
-
 def test_admin_api_requires_admin(logged_in_client):
     resp = logged_in_client.get("/api/admin/config-files")
     assert resp.status_code == 403
@@ -18,8 +17,7 @@ def test_admin_api_requires_admin(logged_in_client):
     assert data["ok"] is False
 
 
-
-def test_admin_can_edit_config_files_and_hot_reload_env(admin_client, app):
+def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     page_resp = admin_client.get("/admin")
     assert page_resp.status_code == 200
     page_text = page_resp.get_data(as_text=True)
@@ -32,7 +30,14 @@ def test_admin_can_edit_config_files_and_hot_reload_env(admin_client, app):
     files_data = files_resp.get_json()
     assert files_data["default_file_id"] == "auth_users"
     file_ids = [item["id"] for item in files_data["files"]]
-    assert file_ids == ["auth_users", "app_env"]
+    assert file_ids == [
+        "auth_users",
+        "env_app",
+        "env_ai",
+        "env_storage",
+        "env_attachments",
+        "env_logging",
+    ]
 
     auth_config_resp = admin_client.get("/api/admin/config-files/auth_users")
     assert auth_config_resp.status_code == 200
@@ -59,45 +64,76 @@ def test_admin_can_edit_config_files_and_hot_reload_env(admin_client, app):
     persisted_auth = json.loads(auth_file.read_text(encoding="utf-8"))
     assert any(item["username"] == "ops" for item in persisted_auth["users"])
 
-    env_config_resp = admin_client.get("/api/admin/config-files/app_env")
-    assert env_config_resp.status_code == 200
-    env_config_data = env_config_resp.get_json()
-    assert env_config_data["requires_restart"] is True
-    assert "AI_BASE_URL=https://example.invalid/v1" in env_config_data["content"]
+    ai_config_resp = admin_client.get("/api/admin/config-files/env_ai")
+    assert ai_config_resp.status_code == 200
+    ai_config_data = ai_config_resp.get_json()
+    assert ai_config_data["requires_restart"] is True
+    assert "AI_BASE_URL=https://example.invalid/v1" in ai_config_data["content"]
 
-    save_env_resp = admin_client.put(
-        "/api/admin/config-files/app_env",
+    save_ai_resp = admin_client.put(
+        "/api/admin/config-files/env_ai",
         json={
             "content": (
                 "AI_BASE_URL=https://new.example/v1\n"
                 "AI_API_KEY=new-key\n"
                 "AI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
+            )
+        },
+    )
+    assert save_ai_resp.status_code == 200
+    save_ai_data = save_ai_resp.get_json()
+    assert set(save_ai_data["hot_reload"]["applied_keys"]) == {
+        "AI_API_KEY",
+        "AI_BASE_URL",
+        "AI_MODELS",
+    }
+    assert save_ai_data["hot_reload"]["restart_required_keys"] == []
+
+    save_attachment_resp = admin_client.put(
+        "/api/admin/config-files/env_attachments",
+        json={
+            "content": (
                 "MAX_UPLOAD_MB=8\n"
                 "MAX_ATTACHMENTS_PER_MESSAGE=3\n"
                 "MAX_TEXT_FILE_CHARS=4096\n"
                 "ALLOWED_ATTACHMENT_EXTS=.png,.docx\n"
-                "LOG_LEVEL=INFO\n"
             )
         },
     )
-    assert save_env_resp.status_code == 200
-    save_env_data = save_env_resp.get_json()
-    hot_reload = save_env_data["hot_reload"]
-    assert set(hot_reload["applied_keys"]) == {
-        "AI_API_KEY",
-        "AI_BASE_URL",
-        "AI_MODELS",
+    assert save_attachment_resp.status_code == 200
+    save_attachment_data = save_attachment_resp.get_json()
+    assert set(save_attachment_data["hot_reload"]["applied_keys"]) == {
         "ALLOWED_ATTACHMENT_EXTS",
         "MAX_ATTACHMENTS_PER_MESSAGE",
         "MAX_TEXT_FILE_CHARS",
         "MAX_UPLOAD_MB",
     }
-    assert hot_reload["restart_required_keys"] == ["LOG_LEVEL"]
+    assert save_attachment_data["hot_reload"]["restart_required_keys"] == []
 
-    env_file = Path(app.config["ENV_FILE"])
-    env_text = env_file.read_text(encoding="utf-8")
-    assert "AI_BASE_URL=https://new.example/v1" in env_text
-    assert "LOG_LEVEL=INFO" in env_text
+    save_logging_resp = admin_client.put(
+        "/api/admin/config-files/env_logging",
+        json={
+            "content": (
+                "LOG_LEVEL=INFO\n"
+                "LOG_FILE=./logs/app.log\n"
+                "LOG_MAX_BYTES=10485760\n"
+                "LOG_BACKUP_COUNT=5\n"
+                "LOG_TO_STDOUT=1\n"
+            )
+        },
+    )
+    assert save_logging_resp.status_code == 200
+    save_logging_data = save_logging_resp.get_json()
+    assert save_logging_data["hot_reload"]["applied_keys"] == []
+    assert save_logging_data["hot_reload"]["restart_required_keys"] == ["LOG_LEVEL"]
+
+    env_files = app.config["ENV_FILES"]
+    ai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
+    attachments_env_text = Path(env_files[3]).read_text(encoding="utf-8")
+    logging_env_text = Path(env_files[4]).read_text(encoding="utf-8")
+    assert "AI_BASE_URL=https://new.example/v1" in ai_env_text
+    assert "MAX_UPLOAD_MB=8" in attachments_env_text
+    assert "LOG_LEVEL=INFO" in logging_env_text
 
     runtime_settings = app.extensions["runtime_state"].settings
     assert runtime_settings.ai_base_url == "https://new.example/v1"
@@ -120,99 +156,3 @@ def test_admin_can_edit_config_files_and_hot_reload_env(admin_client, app):
     assert "maxUploadMB: 8" in chat_page_text
     assert ".docx" in chat_page_text
     assert ".png" in chat_page_text
-
-
-def test_admin_can_edit_grouped_env_files_and_hot_reload(grouped_admin_client, grouped_env_app):
-    files_resp = grouped_admin_client.get("/api/admin/config-files")
-    assert files_resp.status_code == 200
-    files_data = files_resp.get_json()
-    file_ids = [item["id"] for item in files_data["files"]]
-    assert grouped_env_app.config["USES_GROUPED_ENV"] is True
-    assert file_ids == [
-        "auth_users",
-        "env_app",
-        "env_ai",
-        "env_storage",
-        "env_attachments",
-        "env_logging",
-    ]
-
-    ai_config_resp = grouped_admin_client.get("/api/admin/config-files/env_ai")
-    assert ai_config_resp.status_code == 200
-    ai_config_data = ai_config_resp.get_json()
-    assert "AI_BASE_URL=https://example.invalid/v1" in ai_config_data["content"]
-
-    save_ai_resp = grouped_admin_client.put(
-        "/api/admin/config-files/env_ai",
-        json={
-            "content": (
-                "AI_BASE_URL=https://grouped.example/v1\n"
-                "AI_API_KEY=grouped-key\n"
-                "AI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
-            )
-        },
-    )
-    assert save_ai_resp.status_code == 200
-    save_ai_data = save_ai_resp.get_json()
-    assert set(save_ai_data["hot_reload"]["applied_keys"]) == {
-        "AI_API_KEY",
-        "AI_BASE_URL",
-        "AI_MODELS",
-    }
-    assert save_ai_data["hot_reload"]["restart_required_keys"] == []
-
-    save_attachment_resp = grouped_admin_client.put(
-        "/api/admin/config-files/env_attachments",
-        json={
-            "content": (
-                "MAX_UPLOAD_MB=8\n"
-                "MAX_ATTACHMENTS_PER_MESSAGE=3\n"
-                "MAX_TEXT_FILE_CHARS=4096\n"
-                "ALLOWED_ATTACHMENT_EXTS=.png,.docx\n"
-            )
-        },
-    )
-    assert save_attachment_resp.status_code == 200
-    save_attachment_data = save_attachment_resp.get_json()
-    assert set(save_attachment_data["hot_reload"]["applied_keys"]) == {
-        "ALLOWED_ATTACHMENT_EXTS",
-        "MAX_ATTACHMENTS_PER_MESSAGE",
-        "MAX_TEXT_FILE_CHARS",
-        "MAX_UPLOAD_MB",
-    }
-    assert save_attachment_data["hot_reload"]["restart_required_keys"] == []
-
-    save_logging_resp = grouped_admin_client.put(
-        "/api/admin/config-files/env_logging",
-        json={
-            "content": (
-                "LOG_LEVEL=INFO\n"
-                "LOG_FILE=./logs/app.log\n"
-                "LOG_MAX_BYTES=10485760\n"
-                "LOG_BACKUP_COUNT=5\n"
-                "LOG_TO_STDOUT=1\n"
-            )
-        },
-    )
-    assert save_logging_resp.status_code == 200
-    save_logging_data = save_logging_resp.get_json()
-    assert save_logging_data["hot_reload"]["applied_keys"] == []
-    assert save_logging_data["hot_reload"]["restart_required_keys"] == ["LOG_LEVEL"]
-
-    env_files = grouped_env_app.config["ENV_FILES"]
-    ai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
-    attachments_env_text = Path(env_files[3]).read_text(encoding="utf-8")
-    logging_env_text = Path(env_files[4]).read_text(encoding="utf-8")
-    assert "AI_BASE_URL=https://grouped.example/v1" in ai_env_text
-    assert "MAX_UPLOAD_MB=8" in attachments_env_text
-    assert "LOG_LEVEL=INFO" in logging_env_text
-
-    runtime_settings = grouped_env_app.extensions["runtime_state"].settings
-    assert runtime_settings.ai_base_url == "https://grouped.example/v1"
-    assert runtime_settings.ai_api_key == "grouped-key"
-    assert runtime_settings.models == ["gpt-4o-mini", "gpt-4.1-mini"]
-    assert runtime_settings.max_upload_mb == 8
-    assert runtime_settings.max_upload_bytes == 8 * 1024 * 1024
-    assert runtime_settings.max_attachments_per_message == 3
-    assert runtime_settings.max_text_file_chars == 4096
-    assert runtime_settings.allowed_attachment_exts == {".docx", ".png"}

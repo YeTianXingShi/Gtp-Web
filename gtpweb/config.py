@@ -11,7 +11,6 @@ from .user_store import load_user_password_map
 from .utils import safe_int
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_ENV_FILE = BASE_DIR / ".env"
 DEFAULT_ENV_DIR = BASE_DIR / "config" / "env"
 DEFAULT_USERS_FILE = BASE_DIR / "config" / "users.json"
 DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
@@ -64,10 +63,8 @@ ENV_GROUP_SPECS = (
 @dataclass(frozen=True)
 class AppConfig:
     secret_key: str
-    env_file: Path
     env_files: tuple[Path, ...]
-    env_dir: Path | None
-    uses_grouped_env: bool
+    env_dir: Path
     users_file: Path
     users: dict[str, str]
     ai_base_url: str
@@ -113,22 +110,11 @@ def build_grouped_env_files(env_dir: Path) -> tuple[Path, ...]:
     return tuple(env_dir / item.filename for item in ENV_GROUP_SPECS)
 
 
-def resolve_env_files() -> tuple[tuple[Path, ...], Path | None, bool]:
-    env_dir_raw = os.getenv("ENV_DIR", "").strip()
-    if env_dir_raw:
-        env_dir = Path(env_dir_raw)
-        if env_dir.exists() and not env_dir.is_dir():
-            raise ValueError("ENV_DIR must point to a directory.")
-        return build_grouped_env_files(env_dir), env_dir, True
-
-    env_file_raw = os.getenv("ENV_FILE", "").strip()
-    if env_file_raw:
-        return (Path(env_file_raw),), None, False
-
-    if DEFAULT_ENV_DIR.exists() and DEFAULT_ENV_DIR.is_dir():
-        return build_grouped_env_files(DEFAULT_ENV_DIR), DEFAULT_ENV_DIR, True
-
-    return (DEFAULT_ENV_FILE,), None, False
+def resolve_env_dir() -> Path:
+    env_dir = Path(os.getenv("ENV_DIR", str(DEFAULT_ENV_DIR))).expanduser()
+    if env_dir.exists() and not env_dir.is_dir():
+        raise ValueError("ENV_DIR must point to a directory.")
+    return env_dir
 
 
 def load_env_files(env_files: tuple[Path, ...]) -> None:
@@ -138,7 +124,8 @@ def load_env_files(env_files: tuple[Path, ...]) -> None:
 
 
 def load_config() -> AppConfig:
-    env_files, env_dir, uses_grouped_env = resolve_env_files()
+    env_dir = resolve_env_dir()
+    env_files = build_grouped_env_files(env_dir)
     load_env_files(env_files)
 
     users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
@@ -168,10 +155,8 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-change-me"),
-        env_file=env_files[0],
         env_files=env_files,
         env_dir=env_dir,
-        uses_grouped_env=uses_grouped_env,
         users_file=users_file,
         users=users,
         ai_base_url=ai_base_url,

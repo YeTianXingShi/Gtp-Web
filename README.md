@@ -68,8 +68,6 @@ cp config/users.example.json config/users.json
   - `LOG_MAX_BYTES`: 单日志文件最大字节（默认 `10485760`）
   - `LOG_BACKUP_COUNT`: 日志轮转保留份数（默认 `5`）
   - `LOG_TO_STDOUT`: 是否同时输出到控制台（`1/0`）
-- 兼容旧模式
-  - 仍支持单文件 `.env`；如需沿用旧方式，可执行 `cp .env.example .env`
 - `config/users.json`
   - 预置登录账号、密码和管理员权限
   - 推荐结构：`{"users":[{"username":"admin","password":"...","is_admin":true}]}`

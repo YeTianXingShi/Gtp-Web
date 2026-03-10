@@ -39,6 +39,16 @@ const ALLOWED_ATTACHMENT_EXTS = Array.isArray(
 const ALLOWED_ATTACHMENT_EXT_SET = new Set(
   ALLOWED_ATTACHMENT_EXTS.filter(Boolean)
 );
+const IMAGE_ATTACHMENT_EXT_SET = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"]);
+const MIME_TO_EXT = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/bmp": ".bmp",
+};
+const temporaryMessageObjectUrls = new Set();
+let pendingFileSeq = 0;
 
 function escapeHtml(raw) {
   return String(raw ?? "")
@@ -187,13 +197,107 @@ function renderMarkdown(raw) {
   return htmlBlocks.join("");
 }
 
+function isImageMimeType(mimeType) {
+  return String(mimeType || "")
+    .trim()
+    .toLowerCase()
+    .startsWith("image/");
+}
+
+function isImageFileName(fileName) {
+  return IMAGE_ATTACHMENT_EXT_SET.has(getFileExt(String(fileName || "")));
+}
+
+function isImageFile(file) {
+  return isImageMimeType(file.type) || isImageFileName(file.name);
+}
+
+function stripAttachmentMarkerLines(text) {
+  return String(text || "")
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("[附件] "))
+    .join("\n")
+    .trim();
+}
+
+function registerTemporaryMessageObjectUrl(url) {
+  if (url && typeof url === "string" && url.startsWith("blob:")) {
+    temporaryMessageObjectUrls.add(url);
+  }
+}
+
+function revokeAllTemporaryMessageObjectUrls() {
+  for (const url of temporaryMessageObjectUrls) {
+    URL.revokeObjectURL(url);
+  }
+  temporaryMessageObjectUrls.clear();
+}
+
+function renderMessageAttachments(contentEl, attachments) {
+  if (!Array.isArray(attachments) || !attachments.length) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "message-attachments";
+
+  for (const attachment of attachments) {
+    const fileName = String(attachment.file_name || "未命名附件");
+    const mimeType = String(attachment.mime_type || "").trim().toLowerCase();
+    const previewUrl = String(attachment.preview_url || "");
+    const isImage =
+      typeof attachment.is_image === "boolean"
+        ? attachment.is_image
+        : isImageMimeType(mimeType) || isImageFileName(fileName);
+
+    const item = document.createElement("div");
+    item.className = `message-attachment${isImage ? " is-image" : ""}`;
+
+    if (isImage && previewUrl) {
+      const link = document.createElement("a");
+      link.className = "message-attachment-image-link";
+      link.href = previewUrl;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+
+      const img = document.createElement("img");
+      img.className = "message-attachment-image";
+      img.src = previewUrl;
+      img.alt = fileName;
+      img.loading = "lazy";
+
+      link.appendChild(img);
+      item.appendChild(link);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "message-attachment-meta";
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "message-attachment-name";
+    nameEl.textContent = fileName;
+    meta.appendChild(nameEl);
+
+    if (!isImage && mimeType) {
+      const typeEl = document.createElement("span");
+      typeEl.className = "message-attachment-type";
+      typeEl.textContent = mimeType;
+      meta.appendChild(typeEl);
+    }
+
+    item.appendChild(meta);
+    wrapper.appendChild(item);
+  }
+
+  contentEl.appendChild(wrapper);
+}
+
 function addMessage(role, content, options = {}) {
-  const { autoScroll = true } = options;
+  const { autoScroll = true, attachments = [] } = options;
   const div = document.createElement("div");
   div.className = `message ${role}`;
   const contentEl = document.createElement("div");
   contentEl.className = "message-content";
   contentEl.innerHTML = renderMarkdown(content);
+  renderMessageAttachments(contentEl, attachments);
   div.appendChild(contentEl);
   messagesEl.appendChild(div);
   if (autoScroll) {
@@ -203,6 +307,7 @@ function addMessage(role, content, options = {}) {
 }
 
 function clearMessages() {
+  revokeAllTemporaryMessageObjectUrls();
   messagesEl.innerHTML = "";
 }
 
@@ -212,7 +317,26 @@ function formatFileSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+function createPendingFileItem(file) {
+  const image = isImageFile(file);
+  return {
+    id: `${Date.now()}_${pendingFileSeq++}`,
+    file,
+    isImage: image,
+    previewUrl: image ? URL.createObjectURL(file) : "",
+  };
+}
+
+function revokePendingFilePreview(item) {
+  if (item && item.previewUrl) {
+    URL.revokeObjectURL(item.previewUrl);
+  }
+}
+
 function clearPendingFiles() {
+  for (const item of state.pendingFiles) {
+    revokePendingFilePreview(item);
+  }
   state.pendingFiles = [];
   fileInputEl.value = "";
   renderSelectedFiles();
@@ -223,34 +347,42 @@ function renderSelectedFiles() {
   if (!state.pendingFiles.length) {
     const hint = document.createElement("span");
     hint.className = "selected-files-hint";
-    hint.textContent = "未选择附件";
+    hint.textContent = "未选择附件，可直接在输入框粘贴图片";
     selectedFilesEl.appendChild(hint);
     return;
   }
 
-  for (const [index, file] of state.pendingFiles.entries()) {
+  for (const [index, item] of state.pendingFiles.entries()) {
+    const file = item.file;
     const chip = document.createElement("span");
-    chip.className = "file-chip";
-    chip.textContent = `${file.name} (${formatFileSize(file.size)})`;
+    chip.className = `file-chip${item.isImage ? " is-image" : ""}`;
+
+    if (item.isImage && item.previewUrl) {
+      const img = document.createElement("img");
+      img.className = "file-chip-image";
+      img.src = item.previewUrl;
+      img.alt = file.name;
+      chip.appendChild(img);
+    }
+
+    const label = document.createElement("span");
+    label.className = "file-chip-label";
+    label.textContent = `${file.name} (${formatFileSize(file.size)})`;
+    chip.appendChild(label);
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "file-chip-remove";
     removeBtn.textContent = "×";
     removeBtn.addEventListener("click", () => {
-      state.pendingFiles.splice(index, 1);
+      const removed = state.pendingFiles.splice(index, 1)[0];
+      revokePendingFilePreview(removed);
       renderSelectedFiles();
     });
 
     chip.appendChild(removeBtn);
     selectedFilesEl.appendChild(chip);
   }
-}
-
-function buildUserMessagePreview(content, files) {
-  const text = content.trim();
-  const fileLines = files.map((file) => `[附件] ${file.name}`);
-  return [text, ...fileLines].filter(Boolean).join("\n");
 }
 
 function getFileExt(fileName) {
@@ -262,6 +394,82 @@ function getFileExt(fileName) {
 function isAllowedAttachment(file) {
   if (!ALLOWED_ATTACHMENT_EXT_SET.size) return true;
   return ALLOWED_ATTACHMENT_EXT_SET.has(getFileExt(file.name));
+}
+
+function inferExtFromMimeType(mimeType) {
+  const key = String(mimeType || "").trim().toLowerCase();
+  return MIME_TO_EXT[key] || "";
+}
+
+function normalizeIncomingFile(file, source = "picker") {
+  if (!(file instanceof File)) return null;
+
+  const rawName = String(file.name || "").trim();
+  if (rawName && getFileExt(rawName)) {
+    return file;
+  }
+
+  const extByMime = inferExtFromMimeType(file.type);
+  let baseName = rawName || `${source}_file_${Date.now()}`;
+  baseName = baseName.replace(/[\\/:*?"<>|]/g, "_").trim();
+  if (!baseName) {
+    baseName = `file_${Date.now()}`;
+  }
+
+  const normalizedName = getFileExt(baseName) ? baseName : `${baseName}${extByMime}`;
+  if (!normalizedName) return file;
+
+  try {
+    return new File([file], normalizedName, {
+      type: file.type || "application/octet-stream",
+      lastModified: file.lastModified || Date.now(),
+    });
+  } catch {
+    return file;
+  }
+}
+
+function appendPendingFiles(incomingFiles, source = "picker") {
+  if (!Array.isArray(incomingFiles) || !incomingFiles.length) return;
+
+  const merged = [...state.pendingFiles];
+  for (const rawFile of incomingFiles) {
+    const file = normalizeIncomingFile(rawFile, source);
+    if (!file) continue;
+
+    if (!isAllowedAttachment(file)) {
+      addMessage("system", `不支持的文件类型：${file.name}`);
+      continue;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      addMessage("system", `文件 ${file.name} 超过 ${MAX_UPLOAD_MB}MB 限制。`);
+      continue;
+    }
+    if (merged.length >= MAX_FILES_PER_MESSAGE) {
+      addMessage("system", `单次最多选择 ${MAX_FILES_PER_MESSAGE} 个附件。`);
+      break;
+    }
+    merged.push(createPendingFileItem(file));
+  }
+
+  state.pendingFiles = merged;
+  fileInputEl.value = "";
+  renderSelectedFiles();
+}
+
+function buildLocalMessageAttachments(pendingFiles) {
+  return pendingFiles.map((item) => {
+    const file = item.file;
+    const previewUrl = item.isImage ? URL.createObjectURL(file) : "";
+    registerTemporaryMessageObjectUrl(previewUrl);
+    return {
+      file_name: file.name,
+      mime_type: file.type || "",
+      is_image: item.isImage,
+      kind: item.isImage ? "image" : "binary",
+      preview_url: previewUrl,
+    };
+  });
 }
 
 function showNoConversationHint() {
@@ -450,20 +658,11 @@ async function loadMessages(conversationId) {
     addMessage("system", "开始新的对话吧。");
   } else {
     for (const msg of data.messages) {
-      let displayContent = msg.content || "";
-      if (Array.isArray(msg.attachments) && msg.attachments.length) {
-        const existing = new Set(
-          displayContent
-            .split("\n")
-            .map((line) => line.trim())
-            .filter((line) => line.startsWith("[附件] "))
-        );
-        const lines = msg.attachments
-          .map((att) => `[附件] ${att.file_name}`)
-          .filter((line) => !existing.has(line));
-        displayContent = [displayContent, ...lines].filter(Boolean).join("\n");
-      }
-      addMessage(msg.role, displayContent);
+      const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
+      const displayContent = attachments.length
+        ? stripAttachmentMarkerLines(msg.content || "")
+        : msg.content || "";
+      addMessage(msg.role, displayContent, { attachments });
     }
   }
   modelSelectEl.value = data.model;
@@ -673,7 +872,8 @@ chatForm.addEventListener("submit", async (event) => {
   if (state.sending) return;
 
   const content = promptEl.value.trim();
-  const files = state.pendingFiles.slice();
+  const pendingFiles = state.pendingFiles.slice();
+  const files = pendingFiles.map((item) => item.file);
   if (!content && !files.length) return;
   if (state.currentConversationId == null) {
     await createConversation();
@@ -681,7 +881,8 @@ chatForm.addEventListener("submit", async (event) => {
 
   const model = modelSelectEl.value;
   const conversationId = state.currentConversationId;
-  addMessage("user", buildUserMessagePreview(content, files));
+  const localAttachments = buildLocalMessageAttachments(pendingFiles);
+  addMessage("user", content, { attachments: localAttachments });
   const assistantEl = addMessage("assistant", "", { autoScroll: false });
   promptEl.value = "";
   clearPendingFiles();
@@ -742,26 +943,24 @@ deleteConvBtn.addEventListener("click", async () => {
 fileInputEl.addEventListener("change", () => {
   const incoming = Array.from(fileInputEl.files || []);
   if (!incoming.length) return;
+  appendPendingFiles(incoming, "picker");
+});
 
-  const merged = [...state.pendingFiles];
-  for (const file of incoming) {
-    if (!isAllowedAttachment(file)) {
-      addMessage("system", `不支持的文件类型：${file.name}`);
-      continue;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      addMessage("system", `文件 ${file.name} 超过 ${MAX_UPLOAD_MB}MB 限制。`);
-      continue;
-    }
-    if (merged.length >= MAX_FILES_PER_MESSAGE) {
-      addMessage("system", `单次最多选择 ${MAX_FILES_PER_MESSAGE} 个附件。`);
-      break;
-    }
-    merged.push(file);
+promptEl.addEventListener("paste", (event) => {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData) return;
+
+  const pastedImages = [];
+  for (const item of Array.from(clipboardData.items || [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+    if (!isImageMimeType(file.type) && !isImageFile(file)) continue;
+    pastedImages.push(file);
   }
-  state.pendingFiles = merged;
-  fileInputEl.value = "";
-  renderSelectedFiles();
+  if (!pastedImages.length) return;
+
+  appendPendingFiles(pastedImages, "paste");
 });
 
 searchInputEl.addEventListener("input", () => {
@@ -784,6 +983,13 @@ searchInputEl.addEventListener("input", () => {
 logoutBtn.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   window.location.href = "/login";
+});
+
+window.addEventListener("beforeunload", () => {
+  revokeAllTemporaryMessageObjectUrls();
+  for (const item of state.pendingFiles) {
+    revokePendingFilePreview(item);
+  }
 });
 
 (async function init() {

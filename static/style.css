@@ -454,6 +454,61 @@ label span {
   margin: 0.72em 0;
 }
 
+.message-attachments {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-attachment {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid rgba(97, 148, 225, 0.44);
+  background: rgba(8, 17, 35, 0.58);
+  padding: 6px 8px;
+}
+
+.message-attachment.is-image {
+  width: min(220px, 100%);
+  padding: 6px;
+}
+
+.message-attachment-image-link {
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.message-attachment-image {
+  width: 100%;
+  max-height: 170px;
+  display: block;
+  object-fit: cover;
+  background: rgba(4, 10, 22, 0.7);
+}
+
+.message-attachment-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.message-attachment-name {
+  max-width: 100%;
+  color: #d8ebff;
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.message-attachment-type {
+  color: #8db2de;
+  font-size: 11px;
+}
+
 .message.user {
   margin-left: auto;
   color: #eff7ff;
@@ -524,6 +579,7 @@ label span {
   flex: 1;
   min-width: 0;
   display: flex;
+  align-items: center;
   gap: 6px;
   overflow-x: auto;
   padding-bottom: 1px;
@@ -549,6 +605,26 @@ label span {
   color: #d4e8ff;
   font-size: 12px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-chip.is-image {
+  height: 46px;
+  padding-left: 6px;
+}
+
+.file-chip-image {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 8px;
+  object-fit: cover;
+  border: 1px solid rgba(118, 182, 255, 0.55);
+}
+
+.file-chip-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, Response, jsonify, request, session
+from flask import Blueprint, Response, jsonify, request, send_file, session
 
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
@@ -261,12 +262,17 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     tuple(message_ids),
                 ).fetchall()
                 for att in attachment_rows:
+                    is_image = str(att["kind"]) == "image"
                     attachment_map[int(att["message_id"])].append(
                         {
                             "id": att["id"],
                             "file_name": att["file_name"],
                             "mime_type": att["mime_type"],
                             "kind": att["kind"],
+                            "is_image": is_image,
+                            "preview_url": (
+                                f"/api/attachments/{att['id']}/content" if is_image else None
+                            ),
                             "created_at": att["created_at"],
                         }
                     )
@@ -290,6 +296,48 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             len(messages),
         )
         return jsonify({"ok": True, "model": conv["model"], "messages": messages})
+
+    @bp.get("/api/attachments/<int:attachment_id>/content")
+    def get_attachment_content(attachment_id: int) -> Response:
+        username = _get_current_user()
+        if not username:
+            return jsonify({"ok": False, "error": "请先登录"}), 401
+        logger.info("读取附件内容请求: 用户=%s 附件ID=%s", username, attachment_id)
+
+        with open_db_connection(db_file) as conn:
+            row = conn.execute(
+                """
+                SELECT ma.id, ma.file_name, ma.file_path, ma.mime_type
+                FROM message_attachments ma
+                JOIN messages m ON m.id = ma.message_id
+                JOIN conversations c ON c.id = m.conversation_id
+                WHERE ma.id = ? AND c.username = ?
+                """,
+                (attachment_id, username),
+            ).fetchone()
+
+        if row is None:
+            logger.warning("读取附件失败: 附件不存在或无权限 用户=%s 附件ID=%s", username, attachment_id)
+            return jsonify({"ok": False, "error": "附件不存在"}), 404
+
+        file_path = Path(str(row["file_path"]))
+        if not file_path.exists():
+            logger.warning(
+                "读取附件失败: 文件缺失 用户=%s 附件ID=%s 路径=%s",
+                username,
+                attachment_id,
+                file_path,
+            )
+            return jsonify({"ok": False, "error": "附件文件不存在"}), 404
+
+        logger.info("读取附件成功: 用户=%s 附件ID=%s 文件=%s", username, attachment_id, row["file_name"])
+        return send_file(
+            file_path,
+            mimetype=str(row["mime_type"] or "application/octet-stream"),
+            as_attachment=False,
+            download_name=str(row["file_name"]),
+            conditional=True,
+        )
 
     @bp.get("/api/conversations/<int:conversation_id>/export")
     def export_conversation(conversation_id: int) -> Response:

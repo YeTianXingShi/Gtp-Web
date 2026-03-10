@@ -1,32 +1,71 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
 
+PNG_1X1_BYTES = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?"
+    b"\x00\x05\xfe\x02\xfeA\x0f\x95~\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 class _FakeStream:
+    def __init__(self, text: str):
+        self._text = text
+
     def __iter__(self):
-        yield {"choices": [{"delta": {"content": "ok"}}]}
+        yield {"choices": [{"delta": {"content": self._text}}]}
 
 
 class _FakeCompletions:
-    def __init__(self, seen_requests: list[dict]):
+    def __init__(self, seen_requests: list[dict], stream_text: str):
         self._seen_requests = seen_requests
+        self._stream_text = stream_text
 
     def create(self, **kwargs):
         self._seen_requests.append(kwargs)
-        return _FakeStream()
+        return _FakeStream(self._stream_text)
 
 
 class _FakeChat:
-    def __init__(self, seen_requests: list[dict]):
-        self.completions = _FakeCompletions(seen_requests)
+    def __init__(self, seen_requests: list[dict], stream_text: str):
+        self.completions = _FakeCompletions(seen_requests, stream_text)
+
+
+class _FakeImageItem:
+    def __init__(self, image_bytes: bytes):
+        self.b64_json = base64.b64encode(image_bytes).decode("ascii")
+
+
+class _FakeImageResponse:
+    def __init__(self, image_bytes: bytes):
+        self.data = [_FakeImageItem(image_bytes)]
+
+
+class _FakeImages:
+    def __init__(self, seen_requests: list[dict], image_bytes: bytes):
+        self._seen_requests = seen_requests
+        self._image_bytes = image_bytes
+
+    def generate(self, **kwargs):
+        self._seen_requests.append(kwargs)
+        return _FakeImageResponse(self._image_bytes)
 
 
 class _FakeOpenAI:
-    def __init__(self, seen_requests: list[dict], **_kwargs):
-        self.chat = _FakeChat(seen_requests)
+    def __init__(
+        self,
+        seen_requests: list[dict],
+        seen_image_requests: list[dict],
+        stream_text: str,
+        image_bytes: bytes,
+        **_kwargs,
+    ):
+        self.chat = _FakeChat(seen_requests, stream_text)
+        self.images = _FakeImages(seen_image_requests, image_bytes)
 
 
 class _FakeGoogleChunk:
@@ -35,17 +74,18 @@ class _FakeGoogleChunk:
 
 
 class _FakeGoogleModels:
-    def __init__(self, seen_requests: list[dict]):
+    def __init__(self, seen_requests: list[dict], stream_text: str):
         self._seen_requests = seen_requests
+        self._stream_text = stream_text
 
     def generate_content_stream(self, **kwargs):
         self._seen_requests.append(kwargs)
-        return [_FakeGoogleChunk("ok")]
+        return [_FakeGoogleChunk(self._stream_text)]
 
 
 class _FakeGoogleClient:
-    def __init__(self, seen_requests: list[dict], **_kwargs):
-        self.models = _FakeGoogleModels(seen_requests)
+    def __init__(self, seen_requests: list[dict], stream_text: str, **_kwargs):
+        self.models = _FakeGoogleModels(seen_requests, stream_text)
 
 
 
@@ -55,6 +95,9 @@ def _create_test_app(
     *,
     openai_env_text: str | None = None,
     google_env_text: str | None = None,
+    openai_stream_text: str = "ok",
+    google_stream_text: str = "ok",
+    image_bytes: bytes = PNG_1X1_BYTES,
 ):
     users_file = tmp_path / "users.json"
     users_file.write_text(
@@ -62,13 +105,16 @@ def _create_test_app(
         encoding="utf-8",
     )
 
-    monkeypatch.delenv("ENV_DIR", raising=False)
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_MODELS", raising=False)
-    monkeypatch.delenv("GOOGLE_BASE_URL", raising=False)
-    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
-    monkeypatch.delenv("GOOGLE_MODELS", raising=False)
+    for key in (
+        "ENV_DIR",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_KEY",
+        "OPENAI_MODELS",
+        "GOOGLE_BASE_URL",
+        "GOOGLE_API_KEY",
+        "GOOGLE_MODELS",
+    ):
+        monkeypatch.delenv(key, raising=False)
 
     env_dir = tmp_path / "env"
     env_dir.mkdir(parents=True, exist_ok=True)
@@ -114,15 +160,26 @@ def _create_test_app(
     from gtpweb import app_factory
 
     seen_openai_requests: list[dict] = []
+    seen_openai_image_requests: list[dict] = []
     seen_google_requests: list[dict] = []
     seen_google_client_kwargs: list[dict] = []
 
     def _build_fake_openai(**kwargs):
-        return _FakeOpenAI(seen_requests=seen_openai_requests, **kwargs)
+        return _FakeOpenAI(
+            seen_requests=seen_openai_requests,
+            seen_image_requests=seen_openai_image_requests,
+            stream_text=openai_stream_text,
+            image_bytes=image_bytes,
+            **kwargs,
+        )
 
     def _build_fake_google(**kwargs):
         seen_google_client_kwargs.append(dict(kwargs))
-        return _FakeGoogleClient(seen_requests=seen_google_requests, **kwargs)
+        return _FakeGoogleClient(
+            seen_requests=seen_google_requests,
+            stream_text=google_stream_text,
+            **kwargs,
+        )
 
     monkeypatch.setattr(app_factory, "build_openai_client", _build_fake_openai)
     monkeypatch.setattr(app_factory, "build_google_client", _build_fake_google)
@@ -130,6 +187,7 @@ def _create_test_app(
     flask_app = app_factory.create_app()
     flask_app.config.update(TESTING=True)
     flask_app.extensions["seen_openai_requests"] = seen_openai_requests
+    flask_app.extensions["seen_openai_image_requests"] = seen_openai_image_requests
     flask_app.extensions["seen_google_requests"] = seen_google_requests
     flask_app.extensions["seen_google_client_kwargs"] = seen_google_client_kwargs
     return flask_app

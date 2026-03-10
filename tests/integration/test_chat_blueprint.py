@@ -164,3 +164,58 @@ def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     assert seen_client_kwargs
     assert seen_client_kwargs[0]["api_key"] == "google-test-key"
     assert seen_client_kwargs[0]["base_url"] == "https://gemini-proxy.example"
+
+
+def test_google_action_payload_generates_assistant_image(app_builder):
+    action_payload = (
+        '{'
+        '"action": "dalle.text2im", '
+        '"action_input": "{\\"prompt\\": \\\"一只坐在窗边晒太阳的橘猫\\\"}", '
+        '"thought": "用户想看图片，我来生成。"'
+        '}'
+    )
+    app = app_builder(
+        google_env_text=(
+            "GOOGLE_BASE_URL=\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+            "GOOGLE_MODELS=gemini-2.0-flash\n"
+        ),
+        google_stream_text=action_payload,
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.0-flash"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    stream_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.0-flash",
+            "content": "帮我画一只猫",
+        },
+        content_type="multipart/form-data",
+    )
+    assert stream_resp.status_code == 200
+    body = stream_resp.get_data(as_text=True)
+    assert '已为你生成图片，请查看下方结果。' in body
+
+    seen_image_requests = app.extensions["seen_openai_image_requests"]
+    assert seen_image_requests
+    assert seen_image_requests[0]["prompt"] == "一只坐在窗边晒太阳的橘猫"
+
+    messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert messages_resp.status_code == 200
+    messages_data = messages_resp.get_json()
+    assistant_message = next(msg for msg in reversed(messages_data["messages"]) if msg["role"] == "assistant")
+    assert assistant_message["content"] == "已为你生成图片，请查看下方结果。"
+    assert len(assistant_message["attachments"]) == 1
+    assert assistant_message["attachments"][0]["is_image"] is True
+    assert assistant_message["attachments"][0]["preview_url"]

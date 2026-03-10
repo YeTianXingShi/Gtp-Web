@@ -925,13 +925,8 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
           sawDoneEvent = true;
           shouldStopReading = true;
           clearIdleTimer();
-          if (typeof event.reply === "string" && event.reply.length > finalReply.length) {
-            const extraText = event.reply.slice(finalReply.length);
+          if (typeof event.reply === "string") {
             finalReply = event.reply;
-            if (extraText) {
-              pendingStreamText += extraText;
-              scheduleStreamTextFlush();
-            }
           }
         }
       });
@@ -960,8 +955,7 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
       } else if (event.type === "done") {
         sawDoneEvent = true;
         clearIdleTimer();
-        if (typeof event.reply === "string" && event.reply.length > finalReply.length) {
-          pendingStreamText += event.reply.slice(finalReply.length);
+        if (typeof event.reply === "string") {
           finalReply = event.reply;
         }
       }

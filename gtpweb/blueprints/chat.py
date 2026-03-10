@@ -17,6 +17,7 @@ from gtpweb.ai_providers import (
     extract_google_text_delta,
     resolve_model_option,
 )
+from gtpweb.assistant_actions import execute_assistant_action, parse_assistant_action
 from gtpweb.attachments import (
     build_file_text_block,
     build_message_content_for_model,
@@ -51,6 +52,64 @@ def _get_current_user(users_file: Path) -> str | None:
     if record is None:
         return None
     return str(record["username"])
+
+
+def _insert_message_attachments(
+    conn: Any,
+    *,
+    message_id: int,
+    attachments: list[dict[str, Any]],
+) -> None:
+    for item in attachments:
+        conn.execute(
+            """
+            INSERT INTO message_attachments (
+                message_id, file_name, file_path, mime_type, kind, parsed_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                item["file_name"],
+                item["file_path"],
+                item["mime_type"],
+                item["kind"],
+                item.get("parsed_text", ""),
+            ),
+        )
+
+
+def _save_assistant_message(
+    *,
+    db_file: Path,
+    conversation_id: int,
+    content: str,
+    attachments: list[dict[str, Any]],
+) -> None:
+    with open_db_connection(db_file) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO messages (conversation_id, role, content)
+            VALUES (?, 'assistant', ?)
+            """,
+            (conversation_id, content),
+        )
+        assistant_message_id = int(cursor.lastrowid)
+        if attachments:
+            _insert_message_attachments(
+                conn,
+                message_id=assistant_message_id,
+                attachments=attachments,
+            )
+        conn.execute(
+            """
+            UPDATE conversations
+            SET updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (conversation_id,),
+        )
+        conn.commit()
 
 
 def create_chat_blueprint(config: AppConfig) -> Blueprint:
@@ -453,31 +512,36 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
             finally:
                 assistant_text = "".join(assistant_parts).strip()
+                assistant_attachments: list[dict[str, Any]] = []
                 if assistant_text:
-                    with open_db_connection(db_file) as conn:
-                        conn.execute(
-                            """
-                            INSERT INTO messages (conversation_id, role, content)
-                            VALUES (?, 'assistant', ?)
-                            """,
-                            (conversation_id, assistant_text),
+                    assistant_action = parse_assistant_action(assistant_text)
+                    if assistant_action is not None:
+                        action_result = execute_assistant_action(
+                            assistant_action,
+                            openai_client=openai_client,
+                            conversation_id=conversation_id,
+                            upload_dir=upload_dir,
+                            safe_username=safe_filename(username),
                         )
-                        conn.execute(
-                            """
-                            UPDATE conversations
-                            SET updated_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                            """,
-                            (conversation_id,),
-                        )
-                        conn.commit()
+                        assistant_text = action_result.message_text.strip()
+                        assistant_attachments = list(action_result.attachments)
+
+                if assistant_text or assistant_attachments:
+                    stored_text = assistant_text or "已生成图片，请查看下方结果。"
+                    _save_assistant_message(
+                        db_file=db_file,
+                        conversation_id=conversation_id,
+                        content=stored_text,
+                        attachments=assistant_attachments,
+                    )
                     logger.info(
-                        "助手消息落库完成: 会话ID=%s 字符数=%s",
+                        "助手消息落库完成: 会话ID=%s 字符数=%s 附件数=%s",
                         conversation_id,
-                        len(assistant_text),
+                        len(stored_text),
+                        len(assistant_attachments),
                     )
                     if not client_disconnected:
-                        yield sse_payload({"type": "done", "reply": assistant_text})
+                        yield sse_payload({"type": "done", "reply": stored_text})
                 else:
                     if (not has_error) and (not client_disconnected):
                         yield sse_payload({"type": "error", "error": "AI 服务返回空结果"})

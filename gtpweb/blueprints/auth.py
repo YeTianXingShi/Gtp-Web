@@ -7,6 +7,7 @@ from typing import Any
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 
 from gtpweb.config import AppConfig
+from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record, verify_user_credentials
 
 logger = logging.getLogger(__name__)
@@ -94,14 +95,16 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         record = _get_current_user_record(users_file)
         if record is None:
             return redirect(url_for("auth.login_page"))
+
+        runtime_settings = get_runtime_state().settings
         return render_template(
             "chat.html",
             username=record["username"],
             is_admin=bool(record["is_admin"]),
-            models=config.models,
-            max_attachments_per_message=config.max_attachments_per_message,
-            max_upload_mb=config.max_upload_mb,
-            allowed_attachment_exts=sorted(config.allowed_attachment_exts),
+            models=runtime_settings.models,
+            max_attachments_per_message=runtime_settings.max_attachments_per_message,
+            max_upload_mb=runtime_settings.max_upload_mb,
+            allowed_attachment_exts=sorted(runtime_settings.allowed_attachment_exts),
         )
 
     return bp

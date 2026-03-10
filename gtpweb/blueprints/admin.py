@@ -5,9 +5,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for
 
 from gtpweb.config import AppConfig
+from gtpweb.runtime_state import apply_runtime_env_values, parse_env_text
 from gtpweb.user_store import (
     create_user,
     delete_user,
@@ -69,7 +70,7 @@ def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
         CONFIG_FILE_AUTH_USERS: {
             "id": CONFIG_FILE_AUTH_USERS,
             "label": "认证配置",
-            "description": "管理普通用户和管理员账号，保存后立即生效。",
+            "description": "直接编辑用户认证 JSON，保存后立即生效。",
             "path": config.users_file,
             "requires_restart": False,
             "format": "json",
@@ -77,7 +78,7 @@ def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
         CONFIG_FILE_APP_ENV: {
             "id": CONFIG_FILE_APP_ENV,
             "label": "应用环境变量",
-            "description": "管理 .env 配置，修改后通常需要重启服务才能完全生效。",
+            "description": "编辑 .env 配置。支持自动热更新部分运行项，结构性配置仍需重启。",
             "path": config.env_file,
             "requires_restart": True,
             "format": "dotenv",
@@ -284,24 +285,34 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         if not isinstance(raw_content, str):
             return jsonify({"ok": False, "error": "配置内容必须是字符串"}), 400
 
+        hot_reload: dict[str, list[str]] | None = None
         try:
             item = _get_config_file_item(config_files, file_id)
+            parsed_env_values = parse_env_text(raw_content) if item["id"] == CONFIG_FILE_APP_ENV else None
             content = _save_config_file_content(
                 item,
                 raw_content,
                 current_username=current_record["username"],
             )
+            if parsed_env_values is not None:
+                hot_reload = apply_runtime_env_values(current_app, config, parsed_env_values)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
-        logger.info("后台保存配置文件成功: 文件ID=%s 路径=%s", file_id, item["path"])
-        return jsonify(
-            {
-                "ok": True,
-                **_serialize_config_file_item(item),
-                "content": content,
-            }
+        logger.info(
+            "后台保存配置文件成功: 文件ID=%s 路径=%s 热更新=%s",
+            file_id,
+            item["path"],
+            hot_reload,
         )
+        response_body: dict[str, Any] = {
+            "ok": True,
+            **_serialize_config_file_item(item),
+            "content": content,
+        }
+        if hot_reload is not None:
+            response_body["hot_reload"] = hot_reload
+        return jsonify(response_body)
 
     @bp.get("/api/admin/auth-config")
     def get_auth_config() -> Any:

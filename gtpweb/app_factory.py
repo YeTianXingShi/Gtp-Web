@@ -10,6 +10,7 @@ from .blueprints import register_blueprints
 from .config import BASE_DIR, load_config
 from .db import init_db
 from .logging_config import configure_logging, register_request_logging
+from .runtime_state import create_runtime_state
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,17 @@ def create_app() -> Flask:
     config.upload_dir.mkdir(parents=True, exist_ok=True)
     logger.info("应用启动: 上传目录已就绪 路径=%s", config.upload_dir)
 
-    openai_client = OpenAI(
-        api_key=config.ai_api_key,
-        base_url=config.ai_base_url,
+    openai_client_factory = lambda **kwargs: OpenAI(**kwargs)
+    app.extensions["openai_client_factory"] = openai_client_factory
+    app.extensions["runtime_base_config"] = config
+    app.extensions["runtime_state"] = create_runtime_state(config, openai_client_factory)
+    logger.info(
+        "应用启动: 运行时配置初始化完成 base_url=%s 模型=%s",
+        app.extensions["runtime_state"].settings.ai_base_url,
+        ",".join(app.extensions["runtime_state"].settings.models),
     )
-    logger.info("应用启动: AI 客户端初始化完成 base_url=%s", config.ai_base_url)
 
     register_request_logging(app)
-    register_blueprints(app, config, openai_client)
+    register_blueprints(app, config)
     logger.info("应用启动完成: 已注册蓝图=%s", ",".join(sorted(app.blueprints.keys())))
     return app

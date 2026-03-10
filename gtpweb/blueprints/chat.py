@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from flask import Blueprint, Response, jsonify, request, session, stream_with_context
-from openai import APIStatusError, OpenAI, OpenAIError
+from openai import APIStatusError, OpenAIError
 from werkzeug.datastructures import FileStorage
 
 from gtpweb.attachments import (
@@ -29,6 +29,7 @@ from gtpweb.attachments import (
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
 from gtpweb.openai_stream import extract_status_error_message, extract_text_delta, sse_payload
+from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
@@ -45,25 +46,29 @@ def _get_current_user(users_file: Path) -> str | None:
     return str(record["username"])
 
 
-def create_chat_blueprint(config: AppConfig, openai_client: OpenAI) -> Blueprint:
+def create_chat_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("chat", __name__)
 
     db_file = config.db_file
     users_file = config.users_file
     upload_dir = config.upload_dir
-    max_upload_mb = config.max_upload_mb
-    max_upload_bytes = config.max_upload_bytes
-    max_attachments_per_message = config.max_attachments_per_message
-    max_text_file_chars = config.max_text_file_chars
-    allowed_attachment_exts = config.allowed_attachment_exts
-    models = config.models
-    ai_base_url = config.ai_base_url
 
     @bp.post("/api/chat/stream")
     def chat_stream() -> Response:
         username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
+
+        runtime_state = get_runtime_state()
+        runtime_settings = runtime_state.settings
+        openai_client = runtime_state.openai_client
+        max_upload_mb = runtime_settings.max_upload_mb
+        max_upload_bytes = runtime_settings.max_upload_bytes
+        max_attachments_per_message = runtime_settings.max_attachments_per_message
+        max_text_file_chars = runtime_settings.max_text_file_chars
+        allowed_attachment_exts = runtime_settings.allowed_attachment_exts
+        models = runtime_settings.models
+        ai_base_url = runtime_settings.ai_base_url
 
         content_type = request.content_type or ""
         uploaded_files: list[FileStorage] = []

@@ -9,6 +9,7 @@ from flask import Blueprint, Response, jsonify, request, send_file, session
 
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
+from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename
 
@@ -29,7 +30,6 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("conversation", __name__)
 
     db_file = config.db_file
-    models = config.models
     users_file = config.users_file
 
     @bp.get("/api/conversations")
@@ -180,6 +180,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
+
+        runtime_settings = get_runtime_state().settings
+        models = runtime_settings.models
 
         payload = request.get_json(silent=True) or {}
         model = str(payload.get("model", models[0])).strip() or models[0]

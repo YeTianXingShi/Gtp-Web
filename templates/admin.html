@@ -19,40 +19,8 @@
       <section class="admin-panel">
         <div class="panel-header">
           <div>
-            <h1>用户管理</h1>
-            <p class="panel-hint">新增、修改普通用户和管理员账号。</p>
-          </div>
-          <button id="reload-users-btn" class="btn-secondary" type="button">刷新列表</button>
-        </div>
-
-        <form id="create-user-form" class="admin-form">
-          <label>
-            <span>用户名</span>
-            <input id="new-username" type="text" maxlength="60" required />
-          </label>
-          <label>
-            <span>密码</span>
-            <input id="new-password" type="password" maxlength="120" required />
-          </label>
-          <label class="toggle-field">
-            <span>管理员权限</span>
-            <div class="toggle-inline">
-              <input id="new-is-admin" type="checkbox" />
-              <span>创建为管理员</span>
-            </div>
-          </label>
-          <button id="create-user-btn" type="submit">新增用户</button>
-        </form>
-
-        <p id="users-error" class="error"></p>
-        <section id="users-list" class="users-list"></section>
-      </section>
-
-      <section class="admin-panel">
-        <div class="panel-header">
-          <div>
             <h1>配置文件管理</h1>
-            <p class="panel-hint">切换多个配置文件进行查看和编辑，保存后按提示决定是否重启服务。</p>
+            <p class="panel-hint">直接编辑白名单配置文件。保存 `.env` 后会自动热更新支持的运行项，其余改动按提示决定是否重启服务。</p>
           </div>
           <button id="reload-config-btn" class="btn-secondary" type="button">重新加载</button>
         </div>
@@ -67,6 +35,7 @@
         <div id="config-description" class="panel-hint"></div>
         <div class="config-meta">文件路径：<code id="config-path"></code></div>
         <p id="config-error" class="error"></p>
+        <p id="config-save-result" class="config-save-result"></p>
         <textarea id="config-editor" class="config-editor" spellcheck="false"></textarea>
         <div class="panel-actions">
           <button id="save-config-btn" type="button">保存当前文件</button>

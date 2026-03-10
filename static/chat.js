@@ -61,6 +61,8 @@ const MIME_TO_EXT = {
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
 };
 const temporaryMessageObjectUrls = new Set();
+const STREAM_IDLE_TIMEOUT_MS = 30000;
+const STREAM_IDLE_TIMEOUT_SECONDS = Math.floor(STREAM_IDLE_TIMEOUT_MS / 1000);
 let pendingFileSeq = 0;
 
 function escapeHtml(raw) {
@@ -783,6 +785,20 @@ function cancelUiFrame(handle) {
   window.clearTimeout(handle);
 }
 
+function buildStreamError(message, partialReply = "") {
+  const error = new Error(message);
+  if (partialReply) {
+    error.keepPartial = true;
+    error.partialReply = partialReply;
+  }
+  return error;
+}
+
+function getErrorMessage(err) {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err);
+}
+
 async function streamReply({ conversationId, model, content, files, assistantEl }) {
   const formData = new FormData();
   formData.append("conversation_id", String(conversationId));
@@ -792,27 +808,45 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     formData.append("files", file);
   }
 
-  const resp = await fetch("/api/chat/stream", {
-    method: "POST",
-    body: formData,
-  });
-  if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}));
-    throw new Error(data.error || "请求失败");
-  }
-  if (!resp.body) {
-    throw new Error("浏览器不支持流式响应");
-  }
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder("utf-8");
+  const controller = new AbortController();
   const assistantContentEl = assistantEl.querySelector(".message-content");
+  let idleTimer = null;
   let buffer = "";
   let streamError = "";
   let finalReply = "";
   let pendingStreamText = "";
   let streamRenderHandle = null;
   let streamTextNode = null;
+  let sawDoneEvent = false;
+  let shouldStopReading = false;
+  let streamAbortReason = "";
+
+  const clearIdleTimer = () => {
+    if (idleTimer != null) {
+      window.clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+
+  const resetIdleTimer = () => {
+    clearIdleTimer();
+    idleTimer = window.setTimeout(() => {
+      streamAbortReason = finalReply
+        ? `流式响应超过 ${STREAM_IDLE_TIMEOUT_SECONDS} 秒未返回新内容，已保留当前内容，请重试继续。`
+        : `流式响应超过 ${STREAM_IDLE_TIMEOUT_SECONDS} 秒未返回新内容，请重试。`;
+      controller.abort();
+    }, STREAM_IDLE_TIMEOUT_MS);
+  };
+
+  const buildDisconnectedMessage = () =>
+    finalReply
+      ? "流式连接已中断，已保留当前内容，请重试继续。"
+      : "流式连接已中断，请重试。";
+
+  const buildUnexpectedEndMessage = () =>
+    finalReply
+      ? "流式响应异常结束，已保留当前内容，请重试继续。"
+      : "流式响应异常结束，请重试。";
 
   const flushStreamText = () => {
     streamRenderHandle = null;
@@ -845,19 +879,76 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     assistantContentEl.appendChild(streamTextNode);
   }
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = parseSseEvents(buffer, (event) => {
-      if (event.type === "delta" && typeof event.text === "string") {
-        finalReply += event.text;
-        pendingStreamText += event.text;
-        scheduleStreamTextFlush();
-      } else if (event.type === "error" && typeof event.error === "string") {
-        streamError = event.error;
-      }
+  resetIdleTimer();
+
+  let resp;
+  try {
+    resp = await fetch("/api/chat/stream", {
+      method: "POST",
+      body: formData,
+      signal: controller.signal,
     });
+  } catch (err) {
+    clearIdleTimer();
+    if (controller.signal.aborted && streamAbortReason) {
+      throw buildStreamError(streamAbortReason, finalReply);
+    }
+    throw err;
+  }
+
+  if (!resp.ok) {
+    clearIdleTimer();
+    const data = await resp.json().catch(() => ({}));
+    throw new Error(data.error || "请求失败");
+  }
+  if (!resp.body) {
+    clearIdleTimer();
+    throw new Error("浏览器不支持流式响应");
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      resetIdleTimer();
+      buffer += decoder.decode(value, { stream: true });
+      buffer = parseSseEvents(buffer, (event) => {
+        if (event.type === "delta" && typeof event.text === "string") {
+          finalReply += event.text;
+          pendingStreamText += event.text;
+          scheduleStreamTextFlush();
+        } else if (event.type === "error" && typeof event.error === "string") {
+          streamError = event.error;
+        } else if (event.type === "done") {
+          sawDoneEvent = true;
+          shouldStopReading = true;
+          clearIdleTimer();
+          if (typeof event.reply === "string" && event.reply.length > finalReply.length) {
+            const extraText = event.reply.slice(finalReply.length);
+            finalReply = event.reply;
+            if (extraText) {
+              pendingStreamText += extraText;
+              scheduleStreamTextFlush();
+            }
+          }
+        }
+      });
+      if (shouldStopReading) {
+        await reader.cancel().catch(() => {});
+        break;
+      }
+    }
+  } catch (err) {
+    if (controller.signal.aborted && streamAbortReason) {
+      streamError = streamAbortReason;
+    } else if (!streamError) {
+      streamError = buildDisconnectedMessage();
+    }
+  } finally {
+    clearIdleTimer();
   }
 
   if (buffer) {
@@ -867,14 +958,24 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
         pendingStreamText += event.text;
       } else if (event.type === "error" && typeof event.error === "string") {
         streamError = event.error;
+      } else if (event.type === "done") {
+        sawDoneEvent = true;
+        clearIdleTimer();
+        if (typeof event.reply === "string" && event.reply.length > finalReply.length) {
+          pendingStreamText += event.reply.slice(finalReply.length);
+          finalReply = event.reply;
+        }
       }
     });
   }
 
   finalizeStreamRender();
 
+  if (!sawDoneEvent && !streamError) {
+    streamError = buildUnexpectedEndMessage();
+  }
   if (streamError) {
-    throw new Error(streamError);
+    throw buildStreamError(streamError, finalReply);
   }
   return finalReply;
 }
@@ -1006,8 +1107,10 @@ chatForm.addEventListener("submit", async (event) => {
     await loadConversations();
     renderConversations();
   } catch (err) {
-    assistantEl.remove();
-    addMessage("system", `请求失败：${err}`);
+    if (!err || err.keepPartial !== true) {
+      assistantEl.remove();
+    }
+    addMessage("system", `请求失败：${getErrorMessage(err)}`);
   } finally {
     state.sending = false;
     updateActionButtons();

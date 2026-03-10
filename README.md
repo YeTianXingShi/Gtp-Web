@@ -2,20 +2,22 @@
 
 简化版多用户 AI Chat Web：
 
-- 预置账号登录（服务端固定账号）
+- 预置账号登录（账号与管理员权限来自 JSON 配置）
 - 固定模型列表（服务端配置，前端只可选择）
 - 聊天记录持久化在后端 SQLite（按账号隔离）
 - 流式输出（SSE）
 - 会话搜索（按标题与消息内容）
 - 会话删除、导出（JSON/TXT）与重命名
 - 支持图片与文件输入（图片 + 常见文本文件 + Word/Excel 解析）
+- 内置后台管理（管理员可管理用户与认证配置文件）
 - 转发到你预先配置好的 AI 服务（OpenAI 兼容 `chat.completions`）
 
 ## 0. 后端结构
 
 - `app.py`: 启动入口（保持 `python app.py` 不变）
 - `gtpweb/app_factory.py`: Flask 应用装配
-- `gtpweb/blueprints/auth.py`: 认证与页面路由
+- `gtpweb/blueprints/auth.py`: 认证与登录页面路由
+- `gtpweb/blueprints/admin.py`: 后台管理路由
 - `gtpweb/blueprints/conversation.py`: 会话管理路由
 - `gtpweb/blueprints/chat.py`: 聊天流式路由
 - `gtpweb/routes.py`: 路由注册兼容层（薄封装）
@@ -58,7 +60,8 @@ cp config/users.example.json config/users.json
   - `LOG_BACKUP_COUNT`: 日志轮转保留份数（默认 `5`）
   - `LOG_TO_STDOUT`: 是否同时输出到控制台（`1/0`）
 - `config/users.json`
-  - 预置登录账号和密码
+  - 预置登录账号、密码和管理员权限
+  - 推荐结构：`{"users":[{"username":"admin","password":"...","is_admin":true}]}`
 
 ## 3. 启动
 
@@ -80,20 +83,26 @@ pytest
 - `tests/unit/`: 纯函数与工具层测试
 - `tests/integration/`: 蓝图接口行为测试
 
-## 5. 当前边界
+## 5. 后台管理
+
+- 管理员账号同样存放在 `config/users.json`，通过 `is_admin: true` 标识。
+- 管理员登录后默认进入 `/admin`，可管理用户账号并直接编辑认证配置 JSON。
+- 用户或管理员配置保存后立即生效；如果当前管理员在配置中被移除或取消管理员权限，系统会拒绝保存。
+
+## 6. 当前边界
 
 - 账号密码为配置文件明文（MVP 版，建议后续改为哈希）
 - 已支持 `.doc/.docx/.xls/.xlsx` 文档解析（`.doc` 为尽力解析，推荐 `.docx`）
 - 非白名单扩展名会被后端严格拒绝
 - 暂不支持会话归档/标签管理
 
-## 6. 后续可扩展
+## 7. 后续可扩展
 
-- 接入 SQLite + 密码哈希 + 管理后台
-- 增加管理员页面（账号管理、审计日志）
+- 接入 SQLite + 密码哈希
+- 增加审计日志与配置变更历史
 - 增加导出 PDF/Markdown、批量导出
 
-## 7. 常见报错排查
+## 8. 常见报错排查
 
 - 前端提示 `<!DOCTYPE html>...`：
   - 说明上游返回了 HTML 错误页，不是模型 JSON。

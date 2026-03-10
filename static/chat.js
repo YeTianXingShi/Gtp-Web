@@ -3,6 +3,7 @@ const chatForm = document.getElementById("chat-form");
 const promptEl = document.getElementById("prompt");
 const modelSelectEl = document.getElementById("model-select");
 const logoutBtn = document.getElementById("logout-btn");
+const adminBtn = document.getElementById("admin-btn");
 const sendBtn = document.getElementById("send-btn");
 const newConvBtn = document.getElementById("new-conv-btn");
 const renameConvBtn = document.getElementById("rename-conv-btn");
@@ -1201,6 +1202,12 @@ searchInputEl.addEventListener("input", () => {
     }
   }, 250);
 });
+
+if (adminBtn) {
+  adminBtn.addEventListener("click", () => {
+    window.location.href = "/admin";
+  });
+}
 
 logoutBtn.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });

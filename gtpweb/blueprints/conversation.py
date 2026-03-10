@@ -9,14 +9,20 @@ from flask import Blueprint, Response, jsonify, request, send_file, session
 
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
+from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename
 
 logger = logging.getLogger(__name__)
 
 
-def _get_current_user() -> str | None:
+def _get_current_user(users_file: Path) -> str | None:
     username = session.get("username")
-    return username if isinstance(username, str) and username else None
+    if not isinstance(username, str) or not username:
+        return None
+    record = get_user_record(users_file, username)
+    if record is None:
+        return None
+    return str(record["username"])
 
 
 def create_conversation_blueprint(config: AppConfig) -> Blueprint:
@@ -24,10 +30,11 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     db_file = config.db_file
     models = config.models
+    users_file = config.users_file
 
     @bp.get("/api/conversations")
     def list_conversations() -> Any:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
         query = str(request.args.get("q", "")).strip()
@@ -80,7 +87,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.delete("/api/conversations/<int:conversation_id>")
     def delete_conversation(conversation_id: int) -> Any:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
         logger.info("删除会话请求: 用户=%s 会话ID=%s", username, conversation_id)
@@ -106,7 +113,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.patch("/api/conversations/<int:conversation_id>")
     def rename_conversation(conversation_id: int) -> Any:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 
@@ -170,7 +177,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.post("/api/conversations")
     def create_conversation() -> Any:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 
@@ -220,7 +227,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.get("/api/conversations/<int:conversation_id>/messages")
     def list_messages(conversation_id: int) -> Any:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
         logger.info("查询消息列表: 用户=%s 会话ID=%s", username, conversation_id)
@@ -299,7 +306,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.get("/api/attachments/<int:attachment_id>/content")
     def get_attachment_content(attachment_id: int) -> Response:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
         logger.info("读取附件内容请求: 用户=%s 附件ID=%s", username, attachment_id)
@@ -341,7 +348,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
     @bp.get("/api/conversations/<int:conversation_id>/export")
     def export_conversation(conversation_id: int) -> Response:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 

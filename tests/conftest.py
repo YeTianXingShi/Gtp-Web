@@ -32,7 +32,10 @@ class _FakeOpenAI:
 @pytest.fixture()
 def app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     users_file = tmp_path / "users.json"
-    users_file.write_text('{"users":{"u":"p"}}', encoding="utf-8")
+    users_file.write_text(
+        '{"users":[{"username":"admin","password":"admin-pass","is_admin":true},{"username":"u","password":"p","is_admin":false}]}',
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv("USERS_FILE", str(users_file))
     monkeypatch.setenv("CHAT_DB_FILE", str(tmp_path / "chat.db"))
@@ -68,5 +71,12 @@ def client(app):
 @pytest.fixture()
 def logged_in_client(client):
     resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert resp.status_code == 200
+    return client
+
+
+@pytest.fixture()
+def admin_client(client):
+    resp = client.post("/api/login", json={"username": "admin", "password": "admin-pass"})
     assert resp.status_code == 200
     return client

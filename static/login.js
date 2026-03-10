@@ -21,7 +21,7 @@ form.addEventListener("submit", async (event) => {
       return;
     }
 
-    window.location.href = "/chat";
+    window.location.href = data.redirect_to || (data.is_admin ? "/admin" : "/chat");
   } catch (err) {
     errorEl.textContent = `请求失败：${err}`;
   }

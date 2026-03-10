@@ -1,6 +1,14 @@
 {
-  "users": {
-    "admin": "ChangeThis123",
-    "alice": "AlicePass123"
-  }
+  "users": [
+    {
+      "username": "admin",
+      "password": "ChangeThis123",
+      "is_admin": true
+    },
+    {
+      "username": "alice",
+      "password": "AlicePass123",
+      "is_admin": false
+    }
+  ]
 }

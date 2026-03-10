@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from .attachments import parse_allowed_attachment_exts
+from .user_store import load_user_password_map
 from .utils import safe_int
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,15 +41,7 @@ class AppConfig:
 
 
 def load_users(users_file: Path) -> dict[str, str]:
-    if not users_file.exists():
-        raise FileNotFoundError(
-            f"Users config not found: {users_file}. Copy config/users.example.json to config/users.json first."
-        )
-    data = json.loads(users_file.read_text(encoding="utf-8"))
-    users = data.get("users", {})
-    if not isinstance(users, dict) or not users:
-        raise ValueError("Invalid users config: 'users' must be a non-empty object.")
-    return users
+    return load_user_password_map(users_file)
 
 
 def parse_models(raw_models: str) -> list[str]:

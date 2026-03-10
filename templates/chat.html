@@ -16,6 +16,9 @@
           <option value="{{ model }}">{{ model }}</option>
           {% endfor %}
         </select>
+        {% if is_admin %}
+        <button id="admin-btn" class="btn-secondary" type="button">后台管理</button>
+        {% endif %}
         <button id="logout-btn" type="button">退出</button>
       </div>
     </header>
@@ -49,6 +52,7 @@
     <script>
       window.__APP_CONFIG__ = {
         username: "{{ username }}",
+        isAdmin: {{ is_admin | tojson }},
         maxAttachmentsPerMessage: {{ max_attachments_per_message }},
         maxUploadMB: {{ max_upload_mb }},
         allowedAttachmentExts: {{ allowed_attachment_exts | tojson }},

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>后台管理 - AI Chat</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="admin-page">
+    <header class="topbar">
+      <div>当前管理员：<strong>{{ username }}</strong></div>
+      <div class="toolbar">
+        <button id="chat-btn" class="btn-secondary" type="button">进入聊天</button>
+        <button id="logout-btn" type="button">退出</button>
+      </div>
+    </header>
+
+    <main class="admin-shell">
+      <section class="admin-panel">
+        <div class="panel-header">
+          <div>
+            <h1>用户管理</h1>
+            <p class="panel-hint">新增、修改普通用户和管理员账号。</p>
+          </div>
+          <button id="reload-users-btn" class="btn-secondary" type="button">刷新列表</button>
+        </div>
+
+        <form id="create-user-form" class="admin-form">
+          <label>
+            <span>用户名</span>
+            <input id="new-username" type="text" maxlength="60" required />
+          </label>
+          <label>
+            <span>密码</span>
+            <input id="new-password" type="password" maxlength="120" required />
+          </label>
+          <label class="toggle-field">
+            <span>管理员权限</span>
+            <div class="toggle-inline">
+              <input id="new-is-admin" type="checkbox" />
+              <span>创建为管理员</span>
+            </div>
+          </label>
+          <button id="create-user-btn" type="submit">新增用户</button>
+        </form>
+
+        <p id="users-error" class="error"></p>
+        <section id="users-list" class="users-list"></section>
+      </section>
+
+      <section class="admin-panel">
+        <div class="panel-header">
+          <div>
+            <h1>认证配置文件</h1>
+            <p class="panel-hint">直接编辑用户与管理员 JSON 配置，保存后立即生效。</p>
+          </div>
+          <button id="reload-config-btn" class="btn-secondary" type="button">重新加载</button>
+        </div>
+
+        <div class="config-meta">文件路径：<code id="config-path">{{ auth_config_path }}</code></div>
+        <p id="config-error" class="error"></p>
+        <textarea id="config-editor" class="config-editor" spellcheck="false"></textarea>
+        <div class="panel-actions">
+          <button id="save-config-btn" type="button">保存配置</button>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      window.__ADMIN_CONFIG__ = {
+        username: {{ username | tojson }},
+        authConfigPath: {{ auth_config_path | tojson }},
+      };
+    </script>
+    <script src="{{ url_for('static', filename='admin.js') }}"></script>
+  </body>
+</html>

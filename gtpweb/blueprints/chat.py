@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import time
 from typing import Any
 from uuid import uuid4
@@ -28,20 +29,27 @@ from gtpweb.attachments import (
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
 from gtpweb.openai_stream import extract_status_error_message, extract_text_delta, sse_payload
+from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
 logger = logging.getLogger(__name__)
 
 
-def _get_current_user() -> str | None:
+def _get_current_user(users_file: Path) -> str | None:
     username = session.get("username")
-    return username if isinstance(username, str) and username else None
+    if not isinstance(username, str) or not username:
+        return None
+    record = get_user_record(users_file, username)
+    if record is None:
+        return None
+    return str(record["username"])
 
 
 def create_chat_blueprint(config: AppConfig, openai_client: OpenAI) -> Blueprint:
     bp = Blueprint("chat", __name__)
 
     db_file = config.db_file
+    users_file = config.users_file
     upload_dir = config.upload_dir
     max_upload_mb = config.max_upload_mb
     max_upload_bytes = config.max_upload_bytes
@@ -53,7 +61,7 @@ def create_chat_blueprint(config: AppConfig, openai_client: OpenAI) -> Blueprint
 
     @bp.post("/api/chat/stream")
     def chat_stream() -> Response:
-        username = _get_current_user()
+        username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 

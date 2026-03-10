@@ -37,6 +37,13 @@ def app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         encoding="utf-8",
     )
 
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "AI_BASE_URL=https://example.invalid/v1\nAI_API_KEY=test-key\nAI_MODELS=gpt-4o-mini\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("ENV_FILE", str(env_file))
     monkeypatch.setenv("USERS_FILE", str(users_file))
     monkeypatch.setenv("CHAT_DB_FILE", str(tmp_path / "chat.db"))
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))

@@ -34,6 +34,8 @@ def create_app() -> Flask:
     )
     app.secret_key = config.secret_key
     app.permanent_session_lifetime = timedelta(hours=12)
+    app.config["ENV_FILE"] = str(config.env_file)
+    app.config["USERS_FILE"] = str(config.users_file)
 
     init_db(config.db_file)
     logger.info("应用启动: 数据库初始化完成 数据库=%s", config.db_file)

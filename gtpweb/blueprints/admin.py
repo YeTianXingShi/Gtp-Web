@@ -22,6 +22,10 @@ from gtpweb.user_store import (
 logger = logging.getLogger(__name__)
 
 
+CONFIG_FILE_AUTH_USERS = "auth_users"
+CONFIG_FILE_APP_ENV = "app_env"
+
+
 def _get_current_user_record(users_file: Path) -> dict[str, Any] | None:
     username = session.get("username")
     if not isinstance(username, str) or not username:
@@ -53,9 +57,102 @@ def _require_admin_api(users_file: Path) -> tuple[dict[str, Any] | None, tuple[A
     return record, None
 
 
+def _normalize_text_file_content(raw_text: str) -> str:
+    normalized = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    if normalized and not normalized.endswith("\n"):
+        normalized += "\n"
+    return normalized
+
+
+def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
+    return {
+        CONFIG_FILE_AUTH_USERS: {
+            "id": CONFIG_FILE_AUTH_USERS,
+            "label": "认证配置",
+            "description": "管理普通用户和管理员账号，保存后立即生效。",
+            "path": config.users_file,
+            "requires_restart": False,
+            "format": "json",
+        },
+        CONFIG_FILE_APP_ENV: {
+            "id": CONFIG_FILE_APP_ENV,
+            "label": "应用环境变量",
+            "description": "管理 .env 配置，修改后通常需要重启服务才能完全生效。",
+            "path": config.env_file,
+            "requires_restart": True,
+            "format": "dotenv",
+        },
+    }
+
+
+def _serialize_config_file_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item["id"],
+        "label": item["label"],
+        "description": item["description"],
+        "path": str(item["path"]),
+        "requires_restart": bool(item["requires_restart"]),
+        "format": item["format"],
+    }
+
+
+def _get_config_file_item(config_files: dict[str, dict[str, Any]], file_id: str) -> dict[str, Any]:
+    item = config_files.get(file_id)
+    if item is None:
+        raise ValueError("不支持的配置文件")
+    return item
+
+
+def _read_config_file_content(item: dict[str, Any]) -> str:
+    path = Path(item["path"])
+    if item["id"] == CONFIG_FILE_AUTH_USERS:
+        if not path.exists():
+            return users_config_to_text({"users": []})
+        normalized = normalize_users_config(json.loads(path.read_text(encoding="utf-8")))
+        return users_config_to_text(normalized)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _save_config_file_content(
+    item: dict[str, Any],
+    raw_content: str,
+    *,
+    current_username: str,
+) -> str:
+    path = Path(item["path"])
+    if item["id"] == CONFIG_FILE_AUTH_USERS:
+        try:
+            raw_data = json.loads(raw_content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"JSON 解析失败: 第 {exc.lineno} 行第 {exc.colno} 列 {exc.msg}") from exc
+
+        normalized = normalize_users_config(raw_data, require_admin=True)
+        current_user_still_admin = next(
+            (
+                user
+                for user in normalized["users"]
+                if user["username"] == current_username and user["is_admin"]
+            ),
+            None,
+        )
+        if current_user_still_admin is None:
+            raise ValueError("保存后当前登录管理员必须仍然存在且保留管理员权限")
+
+        save_users_config(path, normalized, require_admin=True)
+        return users_config_to_text(normalized)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized_text = _normalize_text_file_content(raw_content)
+    path.write_text(normalized_text, encoding="utf-8")
+    return normalized_text
+
+
 def create_admin_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("admin", __name__)
     users_file = config.users_file
+    config_files = _build_config_file_items(config)
 
     @bp.get("/admin")
     def admin_page() -> Any:
@@ -67,7 +164,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         return render_template(
             "admin.html",
             username=record["username"],
-            auth_config_path=str(users_file),
+            config_files=[_serialize_config_file_item(item) for item in config_files.values()],
         )
 
     @bp.get("/api/admin/users")
@@ -143,18 +240,81 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         logger.info("后台删除用户成功: 用户名=%s", username)
         return jsonify({"ok": True})
 
+    @bp.get("/api/admin/config-files")
+    def list_config_files() -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+        return jsonify(
+            {
+                "ok": True,
+                "files": [_serialize_config_file_item(item) for item in config_files.values()],
+                "default_file_id": CONFIG_FILE_AUTH_USERS,
+            }
+        )
+
+    @bp.get("/api/admin/config-files/<file_id>")
+    def get_config_file(file_id: str) -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        try:
+            item = _get_config_file_item(config_files, file_id)
+            content = _read_config_file_content(item)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        return jsonify(
+            {
+                "ok": True,
+                **_serialize_config_file_item(item),
+                "content": content,
+            }
+        )
+
+    @bp.put("/api/admin/config-files/<file_id>")
+    def update_config_file(file_id: str) -> Any:
+        current_record, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        payload = request.get_json(silent=True) or {}
+        raw_content = payload.get("content", "")
+        if not isinstance(raw_content, str):
+            return jsonify({"ok": False, "error": "配置内容必须是字符串"}), 400
+
+        try:
+            item = _get_config_file_item(config_files, file_id)
+            content = _save_config_file_content(
+                item,
+                raw_content,
+                current_username=current_record["username"],
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        logger.info("后台保存配置文件成功: 文件ID=%s 路径=%s", file_id, item["path"])
+        return jsonify(
+            {
+                "ok": True,
+                **_serialize_config_file_item(item),
+                "content": content,
+            }
+        )
+
     @bp.get("/api/admin/auth-config")
     def get_auth_config() -> Any:
         _, error_response = _require_admin_api(users_file)
         if error_response is not None:
             return error_response
 
-        normalized = normalize_users_config(json.loads(users_file.read_text(encoding="utf-8")))
+        item = config_files[CONFIG_FILE_AUTH_USERS]
         return jsonify(
             {
                 "ok": True,
-                "path": str(users_file),
-                "content": users_config_to_text(normalized),
+                "path": str(item["path"]),
+                "content": _read_config_file_content(item),
             }
         )
 
@@ -169,42 +329,21 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         if not isinstance(raw_content, str) or not raw_content.strip():
             return jsonify({"ok": False, "error": "配置内容不能为空"}), 400
 
+        item = config_files[CONFIG_FILE_AUTH_USERS]
         try:
-            raw_data = json.loads(raw_content)
-        except json.JSONDecodeError as exc:
-            return (
-                jsonify(
-                    {
-                        "ok": False,
-                        "error": f"JSON 解析失败: 第 {exc.lineno} 行第 {exc.colno} 列 {exc.msg}",
-                    }
-                ),
-                400,
+            content = _save_config_file_content(
+                item,
+                raw_content,
+                current_username=current_record["username"],
             )
-
-        try:
-            normalized = normalize_users_config(raw_data, require_admin=True)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
-        current_user_still_admin = next(
-            (
-                item
-                for item in normalized["users"]
-                if item["username"] == current_record["username"] and item["is_admin"]
-            ),
-            None,
-        )
-        if current_user_still_admin is None:
-            return jsonify({"ok": False, "error": "保存后当前登录管理员必须仍然存在且保留管理员权限"}), 400
-
-        save_users_config(users_file, normalized, require_admin=True)
-        logger.info("后台保存认证配置成功: 文件=%s", users_file)
         return jsonify(
             {
                 "ok": True,
-                "path": str(users_file),
-                "content": users_config_to_text(normalized),
+                "path": str(item["path"]),
+                "content": content,
             }
         )
 

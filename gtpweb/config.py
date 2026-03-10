@@ -11,16 +11,18 @@ from .user_store import load_user_password_map
 from .utils import safe_int
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+DEFAULT_ENV_FILE = BASE_DIR / ".env"
 DEFAULT_USERS_FILE = BASE_DIR / "config" / "users.json"
 DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
 DEFAULT_UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 DEFAULT_LOG_FILE = BASE_DIR / "logs" / "app.log"
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(DEFAULT_ENV_FILE)
 
 
 @dataclass(frozen=True)
 class AppConfig:
     secret_key: str
+    env_file: Path
     users_file: Path
     users: dict[str, str]
     ai_base_url: str
@@ -63,6 +65,9 @@ def parse_bool(raw_value: str, default: bool) -> bool:
 
 
 def load_config() -> AppConfig:
+    env_file = Path(os.getenv("ENV_FILE", str(DEFAULT_ENV_FILE)))
+    load_dotenv(env_file, override=False)
+
     users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
     users = load_users(users_file)
 
@@ -90,6 +95,7 @@ def load_config() -> AppConfig:
 
     return AppConfig(
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-change-me"),
+        env_file=env_file,
         users_file=users_file,
         users=users,
         ai_base_url=ai_base_url,

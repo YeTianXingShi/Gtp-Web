@@ -12,9 +12,16 @@ const usersErrorEl = document.getElementById("users-error");
 const configErrorEl = document.getElementById("config-error");
 const configEditorEl = document.getElementById("config-editor");
 const configPathEl = document.getElementById("config-path");
+const configFileSelectEl = document.getElementById("config-file-select");
+const configDescriptionEl = document.getElementById("config-description");
+const configRestartHintEl = document.getElementById("config-restart-hint");
 
 const state = {
   users: [],
+  configFiles: Array.isArray(window.__ADMIN_CONFIG__?.configFiles)
+    ? window.__ADMIN_CONFIG__.configFiles.slice()
+    : [],
+  selectedConfigFileId: "",
   loadingUsers: false,
   savingUsers: false,
   loadingConfig: false,
@@ -43,7 +50,8 @@ function updateActionButtons() {
   const configBusy = state.loadingConfig || state.savingConfig;
   reloadUsersBtn.disabled = userBusy;
   reloadConfigBtn.disabled = configBusy;
-  saveConfigBtn.disabled = configBusy;
+  saveConfigBtn.disabled = configBusy || !state.selectedConfigFileId;
+  configFileSelectEl.disabled = configBusy || !state.configFiles.length;
   createUserForm.querySelector("button[type='submit']").disabled = userBusy;
 }
 
@@ -130,7 +138,7 @@ function renderUsers() {
         });
         passwordInput.value = "";
         await loadUsers();
-        await loadConfig();
+        await loadCurrentConfigFile();
       } catch (err) {
         setUsersError(`保存用户失败：${err}`);
       } finally {
@@ -151,7 +159,7 @@ function renderUsers() {
           method: "DELETE",
         });
         await loadUsers();
-        await loadConfig();
+        await loadCurrentConfigFile();
       } catch (err) {
         setUsersError(`删除用户失败：${err}`);
       } finally {
@@ -169,6 +177,32 @@ function renderUsers() {
   }
 }
 
+function renderConfigFileOptions() {
+  configFileSelectEl.innerHTML = "";
+  for (const item of state.configFiles) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.label;
+    configFileSelectEl.appendChild(option);
+  }
+  if (!state.selectedConfigFileId && state.configFiles.length) {
+    state.selectedConfigFileId = state.configFiles[0].id;
+  }
+  configFileSelectEl.value = state.selectedConfigFileId;
+}
+
+function applyConfigFileMeta(fileData) {
+  configPathEl.textContent = fileData.path || "";
+  configDescriptionEl.textContent = fileData.description || "";
+  if (fileData.requires_restart) {
+    configRestartHintEl.textContent = "修改该文件后通常需要重启服务";
+    configRestartHintEl.classList.add("is-warning");
+  } else {
+    configRestartHintEl.textContent = "保存后立即生效";
+    configRestartHintEl.classList.remove("is-warning");
+  }
+}
+
 async function loadUsers() {
   state.loadingUsers = true;
   updateActionButtons();
@@ -182,13 +216,36 @@ async function loadUsers() {
   }
 }
 
-async function loadConfig() {
+async function loadConfigFiles() {
   state.loadingConfig = true;
   updateActionButtons();
   try {
-    const data = await fetchJson("/api/admin/auth-config");
-    configPathEl.textContent = data.path || window.__ADMIN_CONFIG__?.authConfigPath || "";
+    const data = await fetchJson("/api/admin/config-files");
+    state.configFiles = data.files || [];
+    state.selectedConfigFileId =
+      state.selectedConfigFileId || data.default_file_id || state.configFiles[0]?.id || "";
+    renderConfigFileOptions();
+  } finally {
+    state.loadingConfig = false;
+    updateActionButtons();
+  }
+}
+
+async function loadCurrentConfigFile() {
+  if (!state.selectedConfigFileId) {
+    configEditorEl.value = "";
+    configPathEl.textContent = "";
+    configDescriptionEl.textContent = "";
+    configRestartHintEl.textContent = "";
+    return;
+  }
+
+  state.loadingConfig = true;
+  updateActionButtons();
+  try {
+    const data = await fetchJson(`/api/admin/config-files/${encodeURIComponent(state.selectedConfigFileId)}`);
     configEditorEl.value = data.content || "";
+    applyConfigFileMeta(data);
   } finally {
     state.loadingConfig = false;
     updateActionButtons();
@@ -214,7 +271,7 @@ createUserForm.addEventListener("submit", async (event) => {
     });
     createUserForm.reset();
     await loadUsers();
-    await loadConfig();
+    await loadCurrentConfigFile();
   } catch (err) {
     setUsersError(`新增用户失败：${err}`);
   } finally {
@@ -232,28 +289,45 @@ reloadUsersBtn.addEventListener("click", async () => {
   }
 });
 
+configFileSelectEl.addEventListener("change", async () => {
+  state.selectedConfigFileId = configFileSelectEl.value;
+  setConfigError("");
+  try {
+    await loadCurrentConfigFile();
+  } catch (err) {
+    setConfigError(`加载配置失败：${err}`);
+  }
+});
+
 reloadConfigBtn.addEventListener("click", async () => {
   setConfigError("");
   try {
-    await loadConfig();
+    await loadConfigFiles();
+    await loadCurrentConfigFile();
   } catch (err) {
     setConfigError(`加载配置失败：${err}`);
   }
 });
 
 saveConfigBtn.addEventListener("click", async () => {
-  if (state.savingConfig) return;
+  if (state.savingConfig || !state.selectedConfigFileId) return;
   setConfigError("");
   state.savingConfig = true;
   updateActionButtons();
   try {
-    const data = await fetchJson("/api/admin/auth-config", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: configEditorEl.value }),
-    });
+    const data = await fetchJson(
+      `/api/admin/config-files/${encodeURIComponent(state.selectedConfigFileId)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: configEditorEl.value }),
+      }
+    );
     configEditorEl.value = data.content || configEditorEl.value;
-    await loadUsers();
+    applyConfigFileMeta(data);
+    if (state.selectedConfigFileId === "auth_users") {
+      await loadUsers();
+    }
   } catch (err) {
     setConfigError(`保存配置失败：${err}`);
   } finally {
@@ -275,7 +349,8 @@ logoutBtn.addEventListener("click", async () => {
   updateActionButtons();
   try {
     await loadUsers();
-    await loadConfig();
+    await loadConfigFiles();
+    await loadCurrentConfigFile();
   } catch (err) {
     setUsersError(`初始化失败：${err}`);
   }

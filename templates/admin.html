@@ -51,17 +51,25 @@
       <section class="admin-panel">
         <div class="panel-header">
           <div>
-            <h1>认证配置文件</h1>
-            <p class="panel-hint">直接编辑用户与管理员 JSON 配置，保存后立即生效。</p>
+            <h1>配置文件管理</h1>
+            <p class="panel-hint">切换多个配置文件进行查看和编辑，保存后按提示决定是否重启服务。</p>
           </div>
           <button id="reload-config-btn" class="btn-secondary" type="button">重新加载</button>
         </div>
 
-        <div class="config-meta">文件路径：<code id="config-path">{{ auth_config_path }}</code></div>
+        <div class="config-toolbar">
+          <label class="config-file-field">
+            <span>配置文件</span>
+            <select id="config-file-select"></select>
+          </label>
+          <div id="config-restart-hint" class="config-restart-hint"></div>
+        </div>
+        <div id="config-description" class="panel-hint"></div>
+        <div class="config-meta">文件路径：<code id="config-path"></code></div>
         <p id="config-error" class="error"></p>
         <textarea id="config-editor" class="config-editor" spellcheck="false"></textarea>
         <div class="panel-actions">
-          <button id="save-config-btn" type="button">保存配置</button>
+          <button id="save-config-btn" type="button">保存当前文件</button>
         </div>
       </section>
     </main>
@@ -69,7 +77,7 @@
     <script>
       window.__ADMIN_CONFIG__ = {
         username: {{ username | tojson }},
-        authConfigPath: {{ auth_config_path | tojson }},
+        configFiles: {{ config_files | tojson }},
       };
     </script>
     <script src="{{ url_for('static', filename='admin.js') }}"></script>

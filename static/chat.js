@@ -767,6 +767,22 @@ function parseSseEvents(textChunk, onEvent) {
   return remainder || "";
 }
 
+function scheduleUiFrame(callback) {
+  if (typeof window.requestAnimationFrame === "function") {
+    return window.requestAnimationFrame(callback);
+  }
+  return window.setTimeout(callback, 16);
+}
+
+function cancelUiFrame(handle) {
+  if (handle == null) return;
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(handle);
+    return;
+  }
+  window.clearTimeout(handle);
+}
+
 async function streamReply({ conversationId, model, content, files, assistantEl }) {
   const formData = new FormData();
   formData.append("conversation_id", String(conversationId));
@@ -794,6 +810,40 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
   let buffer = "";
   let streamError = "";
   let finalReply = "";
+  let pendingStreamText = "";
+  let streamRenderHandle = null;
+  let streamTextNode = null;
+
+  const flushStreamText = () => {
+    streamRenderHandle = null;
+    if (!streamTextNode || !pendingStreamText) return;
+    streamTextNode.appendData(pendingStreamText);
+    pendingStreamText = "";
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  };
+
+  const scheduleStreamTextFlush = () => {
+    if (!assistantContentEl || !streamTextNode || !pendingStreamText) return;
+    if (streamRenderHandle != null) return;
+    streamRenderHandle = scheduleUiFrame(flushStreamText);
+  };
+
+  const finalizeStreamRender = () => {
+    if (!assistantContentEl) return;
+    cancelUiFrame(streamRenderHandle);
+    streamRenderHandle = null;
+    flushStreamText();
+    assistantContentEl.classList.remove("is-streaming");
+    assistantContentEl.innerHTML = renderMarkdown(finalReply);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  };
+
+  if (assistantContentEl) {
+    assistantContentEl.classList.add("is-streaming");
+    assistantContentEl.textContent = "";
+    streamTextNode = document.createTextNode("");
+    assistantContentEl.appendChild(streamTextNode);
+  }
 
   while (true) {
     const { done, value } = await reader.read();
@@ -802,9 +852,8 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     buffer = parseSseEvents(buffer, (event) => {
       if (event.type === "delta" && typeof event.text === "string") {
         finalReply += event.text;
-        if (assistantContentEl) {
-          assistantContentEl.innerHTML = renderMarkdown(finalReply);
-        }
+        pendingStreamText += event.text;
+        scheduleStreamTextFlush();
       } else if (event.type === "error" && typeof event.error === "string") {
         streamError = event.error;
       }
@@ -815,14 +864,14 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     parseSseEvents(buffer + "\n\n", (event) => {
       if (event.type === "delta" && typeof event.text === "string") {
         finalReply += event.text;
+        pendingStreamText += event.text;
       } else if (event.type === "error" && typeof event.error === "string") {
         streamError = event.error;
       }
     });
-    if (assistantContentEl) {
-      assistantContentEl.innerHTML = renderMarkdown(finalReply);
-    }
   }
+
+  finalizeStreamRender();
 
   if (streamError) {
     throw new Error(streamError);

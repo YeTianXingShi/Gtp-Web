@@ -357,6 +357,10 @@ label span {
   font-size: 14px;
 }
 
+.message-content.is-streaming {
+  white-space: pre-wrap;
+}
+
 .message-content > :first-child {
   margin-top: 0;
 }

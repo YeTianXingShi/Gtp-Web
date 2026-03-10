@@ -11,16 +11,24 @@ from openai import OpenAI
 
 from gtpweb.ai_providers import ModelOption, build_model_options
 from gtpweb.attachments import parse_allowed_attachment_exts
-from gtpweb.config import AppConfig, parse_models
+from gtpweb.config import (
+    DEFAULT_OPENAI_IMAGE_MODEL,
+    AppConfig,
+    parse_image_tool_provider,
+    parse_models,
+)
 from gtpweb.utils import safe_int
 
 HOT_RELOADABLE_ENV_KEYS = {
+    "IMAGE_TOOL_PROVIDER",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "OPENAI_MODELS",
+    "OPENAI_IMAGE_MODEL",
     "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
     "GOOGLE_MODELS",
+    "GOOGLE_IMAGE_MODEL",
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
@@ -30,12 +38,15 @@ HOT_RELOADABLE_ENV_KEYS = {
 
 @dataclass
 class RuntimeSettings:
+    image_tool_provider: str
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
+    openai_image_model: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
+    google_image_model: str
     models: list[str]
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
@@ -115,19 +126,38 @@ def build_runtime_settings(
         raw_exts = str(env_values["ALLOWED_ATTACHMENT_EXTS"]).strip()
         return parse_allowed_attachment_exts(raw_exts) if raw_exts else set(fallback)
 
+    def choose_openai_image_model(current_models: list[str]) -> str:
+        if "OPENAI_IMAGE_MODEL" in env_values:
+            return str(env_values["OPENAI_IMAGE_MODEL"]).strip()
+        if current_models:
+            return base_config.openai_image_model or DEFAULT_OPENAI_IMAGE_MODEL
+        return ""
+
+    image_tool_provider = parse_image_tool_provider(
+        choose_text("IMAGE_TOOL_PROVIDER", base_config.image_tool_provider)
+    )
     openai_base_url = choose_text("OPENAI_BASE_URL", base_config.openai_base_url, allow_empty=True)
     openai_api_key = choose_text("OPENAI_API_KEY", base_config.openai_api_key, allow_empty=True)
     openai_models = choose_models("OPENAI_MODELS", base_config.openai_models)
+    openai_image_model = choose_openai_image_model(openai_models)
     google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = choose_models("GOOGLE_MODELS", base_config.google_models)
+    google_image_model = choose_text(
+        "GOOGLE_IMAGE_MODEL",
+        base_config.google_image_model,
+        allow_empty=True,
+    )
 
-    if openai_models and not openai_base_url:
-        raise ValueError("OPENAI_BASE_URL is required when OPENAI_MODELS is configured.")
-    if openai_models and not openai_api_key:
-        raise ValueError("OPENAI_API_KEY is required when OPENAI_MODELS is configured.")
-    if google_models and not google_api_key:
-        raise ValueError("GOOGLE_API_KEY is required when GOOGLE_MODELS is configured.")
+    use_openai = bool(openai_models or openai_image_model)
+    use_google = bool(google_models or google_image_model)
+
+    if use_openai and not openai_base_url:
+        raise ValueError("OPENAI_BASE_URL is required when OpenAI is configured.")
+    if use_openai and not openai_api_key:
+        raise ValueError("OPENAI_API_KEY is required when OpenAI is configured.")
+    if use_google and not google_api_key:
+        raise ValueError("GOOGLE_API_KEY is required when Google is configured.")
 
     model_options = build_model_options(openai_models, google_models)
     models = [item.id for item in model_options]
@@ -140,12 +170,15 @@ def build_runtime_settings(
     allowed_attachment_exts = choose_allowed_exts(base_config.allowed_attachment_exts)
 
     return RuntimeSettings(
+        image_tool_provider=image_tool_provider,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
+        openai_image_model=openai_image_model,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
+        google_image_model=google_image_model,
         models=models,
         model_options=model_options,
         max_upload_mb=max_upload_mb,
@@ -161,7 +194,7 @@ def _build_openai_client(
     settings: RuntimeSettings,
     openai_client_factory: Callable[..., OpenAI],
 ) -> OpenAI | None:
-    if not settings.openai_models:
+    if not (settings.openai_models or settings.openai_image_model):
         return None
     return openai_client_factory(
         api_key=settings.openai_api_key,
@@ -174,7 +207,7 @@ def _build_google_client(
     settings: RuntimeSettings,
     google_client_factory: Callable[..., Any],
 ) -> Any | None:
-    if not settings.google_models:
+    if not (settings.google_models or settings.google_image_model):
         return None
     return google_client_factory(
         api_key=settings.google_api_key,
@@ -229,6 +262,7 @@ def apply_runtime_env_values(
         old_settings.openai_base_url != new_settings.openai_base_url
         or old_settings.openai_api_key != new_settings.openai_api_key
         or old_settings.openai_models != new_settings.openai_models
+        or old_settings.openai_image_model != new_settings.openai_image_model
     ):
         openai_client_factory = app.extensions["openai_client_factory"]
         runtime_state.openai_client = _build_openai_client(new_settings, openai_client_factory)
@@ -237,6 +271,7 @@ def apply_runtime_env_values(
         old_settings.google_base_url != new_settings.google_base_url
         or old_settings.google_api_key != new_settings.google_api_key
         or old_settings.google_models != new_settings.google_models
+        or old_settings.google_image_model != new_settings.google_image_model
     ):
         google_client_factory = app.extensions["google_client_factory"]
         runtime_state.google_client = _build_google_client(new_settings, google_client_factory)

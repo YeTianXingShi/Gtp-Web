@@ -68,6 +68,27 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     persisted_auth = json.loads(auth_file.read_text(encoding="utf-8"))
     assert any(item["username"] == "ops" for item in persisted_auth["users"])
 
+    app_config_resp = admin_client.get("/api/admin/config-files/env_app")
+    assert app_config_resp.status_code == 200
+    app_config_data = app_config_resp.get_json()
+    assert "IMAGE_TOOL_PROVIDER=openai" in app_config_data["content"]
+
+    save_app_resp = admin_client.put(
+        "/api/admin/config-files/env_app",
+        json={
+            "content": (
+                "APP_SECRET_KEY=test-secret\n"
+                "PORT=8000\n"
+                "FLASK_DEBUG=1\n"
+                "IMAGE_TOOL_PROVIDER=google\n"
+            )
+        },
+    )
+    assert save_app_resp.status_code == 200
+    save_app_data = save_app_resp.get_json()
+    assert save_app_data["hot_reload"]["applied_keys"] == ["IMAGE_TOOL_PROVIDER"]
+    assert save_app_data["hot_reload"]["restart_required_keys"] == []
+
     openai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
     assert openai_config_resp.status_code == 200
     openai_config_data = openai_config_resp.get_json()
@@ -81,6 +102,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
                 "OPENAI_BASE_URL=https://new.example/v1\n"
                 "OPENAI_API_KEY=new-key\n"
                 "OPENAI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
+                "OPENAI_IMAGE_MODEL=gpt-image-1\n"
             )
         },
     )
@@ -90,6 +112,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_MODELS",
+        "OPENAI_IMAGE_MODEL",
     }
     assert save_openai_data["hot_reload"]["restart_required_keys"] == []
 
@@ -105,6 +128,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
                 "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
                 "GOOGLE_API_KEY=google-new-key\n"
                 "GOOGLE_MODELS=gemini-2.0-flash\n"
+                "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002\n"
             )
         },
     )
@@ -114,6 +138,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "GOOGLE_BASE_URL",
         "GOOGLE_API_KEY",
         "GOOGLE_MODELS",
+        "GOOGLE_IMAGE_MODEL",
     }
     assert save_google_data["hot_reload"]["restart_required_keys"] == []
 
@@ -156,22 +181,29 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert save_logging_data["hot_reload"]["restart_required_keys"] == ["LOG_LEVEL"]
 
     env_files = app.config["ENV_FILES"]
+    app_env_text = Path(env_files[0]).read_text(encoding="utf-8")
     openai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
     google_env_text = Path(env_files[2]).read_text(encoding="utf-8")
     attachments_env_text = Path(env_files[4]).read_text(encoding="utf-8")
     logging_env_text = Path(env_files[5]).read_text(encoding="utf-8")
+    assert "IMAGE_TOOL_PROVIDER=google" in app_env_text
     assert "OPENAI_BASE_URL=https://new.example/v1" in openai_env_text
+    assert "OPENAI_IMAGE_MODEL=gpt-image-1" in openai_env_text
     assert "GOOGLE_BASE_URL=https://gemini-proxy.example" in google_env_text
+    assert "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002" in google_env_text
     assert "MAX_UPLOAD_MB=8" in attachments_env_text
     assert "LOG_LEVEL=INFO" in logging_env_text
 
     runtime_settings = app.extensions["runtime_state"].settings
+    assert runtime_settings.image_tool_provider == "google"
     assert runtime_settings.openai_base_url == "https://new.example/v1"
     assert runtime_settings.openai_api_key == "new-key"
     assert runtime_settings.openai_models == ["gpt-4o-mini", "gpt-4.1-mini"]
+    assert runtime_settings.openai_image_model == "gpt-image-1"
     assert runtime_settings.google_base_url == "https://gemini-proxy.example"
     assert runtime_settings.google_api_key == "google-new-key"
     assert runtime_settings.google_models == ["gemini-2.0-flash"]
+    assert runtime_settings.google_image_model == "imagen-3.0-generate-002"
     assert runtime_settings.models == [
         "openai:gpt-4o-mini",
         "openai:gpt-4.1-mini",

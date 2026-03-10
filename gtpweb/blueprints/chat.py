@@ -518,7 +518,11 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     if assistant_action is not None:
                         action_result = execute_assistant_action(
                             assistant_action,
+                            image_tool_provider=runtime_settings.image_tool_provider,
+                            openai_image_model=runtime_settings.openai_image_model,
+                            google_image_model=runtime_settings.google_image_model,
                             openai_client=openai_client,
+                            google_client=google_client,
                             conversation_id=conversation_id,
                             upload_dir=upload_dir,
                             safe_username=safe_filename(username),

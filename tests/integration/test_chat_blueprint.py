@@ -123,11 +123,17 @@ def test_message_image_preview_url_and_order(logged_in_client):
 
 def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     app = app_builder(
-        openai_env_text="OPENAI_BASE_URL=\nOPENAI_API_KEY=\nOPENAI_MODELS=\n",
+        openai_env_text=(
+            "OPENAI_BASE_URL=\n"
+            "OPENAI_API_KEY=\n"
+            "OPENAI_MODELS=\n"
+            "OPENAI_IMAGE_MODEL=\n"
+        ),
         google_env_text=(
             "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
             "GOOGLE_API_KEY=google-test-key\n"
             "GOOGLE_MODELS=gemini-2.0-flash\n"
+            "GOOGLE_IMAGE_MODEL=\n"
         ),
     )
     client = app.test_client()
@@ -166,7 +172,8 @@ def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     assert seen_client_kwargs[0]["base_url"] == "https://gemini-proxy.example"
 
 
-def test_google_action_payload_generates_assistant_image(app_builder):
+
+def test_google_action_payload_generates_assistant_image_with_openai_provider(app_builder):
     action_payload = (
         '{'
         '"action": "dalle.text2im", '
@@ -179,6 +186,7 @@ def test_google_action_payload_generates_assistant_image(app_builder):
             "GOOGLE_BASE_URL=\n"
             "GOOGLE_API_KEY=google-test-key\n"
             "GOOGLE_MODELS=gemini-2.0-flash\n"
+            "GOOGLE_IMAGE_MODEL=\n"
         ),
         google_stream_text=action_payload,
     )
@@ -205,11 +213,15 @@ def test_google_action_payload_generates_assistant_image(app_builder):
     )
     assert stream_resp.status_code == 200
     body = stream_resp.get_data(as_text=True)
-    assert '已为你生成图片，请查看下方结果。' in body
+    assert "已为你生成图片，请查看下方结果。" in body
 
-    seen_image_requests = app.extensions["seen_openai_image_requests"]
-    assert seen_image_requests
-    assert seen_image_requests[0]["prompt"] == "一只坐在窗边晒太阳的橘猫"
+    seen_openai_image_requests = app.extensions["seen_openai_image_requests"]
+    assert seen_openai_image_requests
+    assert seen_openai_image_requests[0]["model"] == "dall-e-3"
+    assert seen_openai_image_requests[0]["prompt"] == "一只坐在窗边晒太阳的橘猫"
+
+    seen_google_image_requests = app.extensions["seen_google_image_requests"]
+    assert seen_google_image_requests == []
 
     messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
     assert messages_resp.status_code == 200
@@ -219,3 +231,114 @@ def test_google_action_payload_generates_assistant_image(app_builder):
     assert len(assistant_message["attachments"]) == 1
     assert assistant_message["attachments"][0]["is_image"] is True
     assert assistant_message["attachments"][0]["preview_url"]
+
+
+
+def test_google_action_payload_can_switch_to_google_image_model(app_builder):
+    action_payload = (
+        '{'
+        '"action": "dalle.text2im", '
+        '"action_input": "{\\"prompt\\": \\\"一只雪山前奔跑的白狼\\\", \\\"model\\\": \\\"dall-e-3\\\"}", '
+        '"thought": "用户想看图片，我来生成。"'
+        '}'
+    )
+    app = app_builder(
+        app_env_text=(
+            "APP_SECRET_KEY=test-secret\n"
+            "PORT=8000\n"
+            "FLASK_DEBUG=1\n"
+            "IMAGE_TOOL_PROVIDER=google\n"
+        ),
+        google_env_text=(
+            "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+            "GOOGLE_MODELS=gemini-2.0-flash\n"
+            "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002\n"
+        ),
+        google_stream_text=action_payload,
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.0-flash"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    stream_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.0-flash",
+            "content": "帮我画一只狼",
+        },
+        content_type="multipart/form-data",
+    )
+    assert stream_resp.status_code == 200
+    body = stream_resp.get_data(as_text=True)
+    assert "已为你生成图片，请查看下方结果。" in body
+
+    seen_google_image_requests = app.extensions["seen_google_image_requests"]
+    assert seen_google_image_requests
+    assert seen_google_image_requests[0]["model"] == "imagen-3.0-generate-002"
+    assert seen_google_image_requests[0]["prompt"] == "一只雪山前奔跑的白狼"
+
+    seen_openai_image_requests = app.extensions["seen_openai_image_requests"]
+    assert seen_openai_image_requests == []
+
+
+
+def test_empty_image_model_disables_text2im_capability(app_builder):
+    action_payload = (
+        '{'
+        '"action": "dalle.text2im", '
+        '"action_input": "{\\"prompt\\": \\\"一只坐在书桌上的猫\\\", \\\"model\\\": \\\"dall-e-3\\\"}", '
+        '"thought": "用户想看图片，我来生成。"'
+        '}'
+    )
+    app = app_builder(
+        openai_env_text=(
+            "OPENAI_BASE_URL=https://example.invalid/v1\n"
+            "OPENAI_API_KEY=test-key\n"
+            "OPENAI_MODELS=gpt-4o-mini\n"
+            "OPENAI_IMAGE_MODEL=\n"
+        ),
+        google_env_text=(
+            "GOOGLE_BASE_URL=\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+            "GOOGLE_MODELS=gemini-2.0-flash\n"
+            "GOOGLE_IMAGE_MODEL=\n"
+        ),
+        google_stream_text=action_payload,
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.0-flash"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    stream_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.0-flash",
+            "content": "帮我画一只猫",
+        },
+        content_type="multipart/form-data",
+    )
+    assert stream_resp.status_code == 200
+    body = stream_resp.get_data(as_text=True)
+    assert "模型请求生成图片，但当前系统未启用该能力。" in body
+
+    assert app.extensions["seen_openai_image_requests"] == []
+    assert app.extensions["seen_google_image_requests"] == []

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .ai_providers import ModelOption, build_model_options
+from .ai_providers import PROVIDER_GOOGLE, PROVIDER_OPENAI, ModelOption, build_model_options
 from .attachments import parse_allowed_attachment_exts
 from .user_store import load_user_password_map
 from .utils import safe_int
@@ -17,6 +17,7 @@ DEFAULT_USERS_FILE = BASE_DIR / "config" / "users.json"
 DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
 DEFAULT_UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 DEFAULT_LOG_FILE = BASE_DIR / "logs" / "app.log"
+DEFAULT_OPENAI_IMAGE_MODEL = "dall-e-3"
 
 
 @dataclass(frozen=True)
@@ -32,19 +33,19 @@ ENV_GROUP_SPECS = (
         key="app",
         filename="app.env",
         label="应用基础配置",
-        description="维护应用密钥、登录配置路径、端口与调试开关。",
+        description="维护应用密钥、登录配置路径、端口、调试开关与图片工具来源。",
     ),
     EnvGroupSpec(
         key="openai",
         filename="openai.env",
         label="OpenAI 配置",
-        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY 与 OPENAI_MODELS。",
+        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY、OPENAI_MODELS 与 OPENAI_IMAGE_MODEL。",
     ),
     EnvGroupSpec(
         key="google",
         filename="google.env",
         label="Google Gemini 配置",
-        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY 与 GOOGLE_MODELS。",
+        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY、GOOGLE_MODELS 与 GOOGLE_IMAGE_MODEL。",
     ),
     EnvGroupSpec(
         key="storage",
@@ -74,12 +75,15 @@ class AppConfig:
     env_dir: Path
     users_file: Path
     users: dict[str, str]
+    image_tool_provider: str
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
+    openai_image_model: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
+    google_image_model: str
     db_file: Path
     upload_dir: Path
     max_upload_mb: int
@@ -121,6 +125,14 @@ def parse_bool(raw_value: str, default: bool) -> bool:
 
 
 
+def parse_image_tool_provider(raw_value: str) -> str:
+    provider = str(raw_value or "").strip().lower() or PROVIDER_OPENAI
+    if provider not in {PROVIDER_OPENAI, PROVIDER_GOOGLE}:
+        raise ValueError("IMAGE_TOOL_PROVIDER 仅支持 openai 或 google。")
+    return provider
+
+
+
 def build_grouped_env_files(env_dir: Path) -> tuple[Path, ...]:
     return tuple(env_dir / item.filename for item in ENV_GROUP_SPECS)
 
@@ -149,13 +161,21 @@ def load_config() -> AppConfig:
     users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
     users = load_users(users_file)
 
+    image_tool_provider = parse_image_tool_provider(os.getenv("IMAGE_TOOL_PROVIDER", PROVIDER_OPENAI))
+
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "")
     openai_models = parse_models(os.getenv("OPENAI_MODELS", ""), allow_empty=True)
+    raw_openai_image_model = os.getenv("OPENAI_IMAGE_MODEL")
+    if raw_openai_image_model is None:
+        openai_image_model = DEFAULT_OPENAI_IMAGE_MODEL if openai_models else ""
+    else:
+        openai_image_model = raw_openai_image_model.strip()
 
     google_base_url = os.getenv("GOOGLE_BASE_URL", "").strip()
     google_api_key = os.getenv("GOOGLE_API_KEY", "")
     google_models = parse_models(os.getenv("GOOGLE_MODELS", ""), allow_empty=True)
+    google_image_model = os.getenv("GOOGLE_IMAGE_MODEL", "").strip()
 
     db_file = Path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
     upload_dir = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
@@ -173,12 +193,15 @@ def load_config() -> AppConfig:
     log_backup_count = safe_int(os.getenv("LOG_BACKUP_COUNT", "5")) or 5
     log_to_stdout = parse_bool(os.getenv("LOG_TO_STDOUT", "1"), default=True)
 
-    if openai_models and not openai_base_url:
-        raise ValueError("OPENAI_BASE_URL is required when OPENAI_MODELS is configured.")
-    if openai_models and not openai_api_key:
-        raise ValueError("OPENAI_API_KEY is required when OPENAI_MODELS is configured.")
-    if google_models and not google_api_key:
-        raise ValueError("GOOGLE_API_KEY is required when GOOGLE_MODELS is configured.")
+    use_openai = bool(openai_models or openai_image_model)
+    use_google = bool(google_models or google_image_model)
+
+    if use_openai and not openai_base_url:
+        raise ValueError("OPENAI_BASE_URL is required when OpenAI is configured.")
+    if use_openai and not openai_api_key:
+        raise ValueError("OPENAI_API_KEY is required when OpenAI is configured.")
+    if use_google and not google_api_key:
+        raise ValueError("GOOGLE_API_KEY is required when Google is configured.")
 
     return AppConfig(
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-change-me"),
@@ -186,12 +209,15 @@ def load_config() -> AppConfig:
         env_dir=env_dir,
         users_file=users_file,
         users=users,
+        image_tool_provider=image_tool_provider,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
+        openai_image_model=openai_image_model,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
+        google_image_model=google_image_model,
         db_file=db_file,
         upload_dir=upload_dir,
         max_upload_mb=max_upload_mb,

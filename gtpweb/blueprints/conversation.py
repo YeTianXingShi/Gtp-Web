@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
 
@@ -47,6 +49,17 @@ def _get_role_label(role: str) -> str:
 
 def _get_exported_at() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_download_filename(filename: str) -> str:
+    normalized = str(filename or "download").strip() or "download"
+    path_obj = Path(normalized)
+    suffix = re.sub(r"[^A-Za-z0-9.]+", "", path_obj.suffix)
+    stem = path_obj.stem or "download"
+    ascii_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_-") or "download"
+    ascii_fallback = f"{ascii_stem}{suffix}" if suffix else ascii_stem
+    encoded = quote(normalized, safe="")
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _build_export_message(
@@ -537,7 +550,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 body,
                 mimetype="text/plain; charset=utf-8",
                 headers={
-                    "Content-Disposition": f'attachment; filename="{filename_base}.txt"',
+                    "Content-Disposition": _build_download_filename(f"{filename_base}.txt"),
                 },
             )
 
@@ -566,7 +579,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             body,
             mimetype="application/json; charset=utf-8",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename_base}.json"',
+                "Content-Disposition": _build_download_filename(f"{filename_base}.json"),
             },
         )
 

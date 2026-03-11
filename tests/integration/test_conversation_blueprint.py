@@ -97,3 +97,22 @@ def test_export_txt_uses_grouped_reasoning_layout(app_builder):
     assert "这是最终回复。" in body
     assert "思考摘要：" in body
     assert "先整理已知条件。再给出结论。" in body
+
+
+def test_export_uses_ascii_safe_content_disposition_for_unicode_title(logged_in_client):
+    conv_id = _create_conversation(logged_in_client)
+
+    rename_resp = logged_in_client.patch(
+        f"/api/conversations/{conv_id}",
+        json={"title": "中文会话标题"},
+    )
+    assert rename_resp.status_code == 200
+
+    export_resp = logged_in_client.get(f"/api/conversations/{conv_id}/export?format=json")
+    assert export_resp.status_code == 200
+
+    disposition = export_resp.headers["Content-Disposition"]
+    disposition.encode("latin-1")
+    assert "filename*=UTF-8''" in disposition
+    assert 'filename="download.json"' in disposition
+    assert "%E4%B8%AD%E6%96%87%E4%BC%9A%E8%AF%9D%E6%A0%87%E9%A2%98.json" in disposition

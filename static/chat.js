@@ -624,7 +624,8 @@ function setExportMenuOpen(open, options = {}) {
   const { focusFirstItem = false } = options;
   const shouldOpen = Boolean(open) && !exportConvBtn.disabled;
   state.exportMenuOpen = shouldOpen;
-  exportMenuEl.hidden = !shouldOpen;
+  exportMenuEl.parentElement?.classList.toggle("is-open", shouldOpen);
+  exportMenuEl.setAttribute("aria-hidden", String(!shouldOpen));
   exportConvBtn.setAttribute("aria-expanded", String(shouldOpen));
 
   if (!shouldOpen) {
@@ -644,7 +645,8 @@ function setDeleteConfirmOpen(open) {
 
   const shouldOpen = Boolean(open) && !deleteConvBtn.disabled;
   state.deleteConfirmOpen = shouldOpen;
-  deleteConfirmPanelEl.hidden = !shouldOpen;
+  deleteConfirmPanelEl.parentElement?.classList.toggle("is-open", shouldOpen);
+  deleteConfirmPanelEl.setAttribute("aria-hidden", String(!shouldOpen));
   deleteConvBtn.setAttribute("aria-expanded", String(shouldOpen));
 
   if (!shouldOpen) {

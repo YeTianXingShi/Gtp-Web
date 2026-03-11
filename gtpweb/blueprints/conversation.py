@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,76 @@ def _serialize_conversation_row(row: Any, normalized_model: str) -> dict[str, An
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+_ROLE_LABELS = {"user": "用户", "assistant": "助手", "system": "系统"}
+
+
+def _get_role_label(role: str) -> str:
+    return _ROLE_LABELS.get(role, role)
+
+
+def _get_exported_at() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_export_message(
+    *,
+    row: Any,
+    attachments: list[dict[str, Any]],
+    index: int,
+) -> dict[str, Any]:
+    role = str(row["role"])
+    reasoning = str(row["reasoning"] or "")
+    return {
+        "id": int(row["id"]),
+        "index": index,
+        "role": role,
+        "role_label": _get_role_label(role),
+        "content": str(row["content"] or ""),
+        "reasoning": reasoning,
+        "has_reasoning": bool(reasoning),
+        "created_at": row["created_at"],
+        "attachments": attachments,
+    }
+
+
+def _build_txt_export_body(
+    *,
+    conversation: Any,
+    messages: list[dict[str, Any]],
+    exported_at: str,
+) -> str:
+    attachment_count = sum(len(msg.get("attachments", [])) for msg in messages)
+    lines = [
+        f"会话标题：{conversation['title']}",
+        f"模型：{conversation['model']}",
+        f"创建时间：{conversation['created_at']}",
+        f"更新时间：{conversation['updated_at']}",
+        f"导出时间：{exported_at}",
+        f"消息总数：{len(messages)}",
+        f"附件总数：{attachment_count}",
+        "",
+    ]
+
+    for msg in messages:
+        lines.append(f"### 第 {msg['index']} 条｜{msg['role_label']}｜{msg['created_at']}")
+        lines.append("回复：")
+        lines.append(str(msg["content"]))
+        if msg.get("has_reasoning"):
+            lines.append("")
+            lines.append("思考摘要：")
+            lines.append(str(msg["reasoning"]))
+        if msg.get("attachments"):
+            lines.append("")
+            lines.append("附件：")
+            for attachment in msg["attachments"]:
+                lines.append(
+                    f"- {attachment['file_name']}（{attachment['kind']}，{attachment['mime_type']}）"
+                )
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def create_conversation_blueprint(config: AppConfig) -> Blueprint:
@@ -436,18 +507,19 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     )
 
         messages = []
-        for row in rows:
+        for index, row in enumerate(rows, start=1):
             msg_id = int(row["id"])
             messages.append(
-                {
-                    "role": row["role"],
-                    "content": row["content"],
-                    "reasoning": row["reasoning"],
-                    "created_at": row["created_at"],
-                    "attachments": attachment_map.get(msg_id, []),
-                }
+                _build_export_message(
+                    row=row,
+                    attachments=attachment_map.get(msg_id, []),
+                    index=index,
+                )
             )
         filename_base = safe_filename(str(conv["title"]))
+        exported_at = _get_exported_at()
+        attachment_count = sum(len(msg.get("attachments", [])) for msg in messages)
+        reasoning_message_count = sum(1 for msg in messages if msg.get("has_reasoning"))
         logger.info(
             "导出会话准备完成: 用户=%s 会话ID=%s 消息数=%s 附件消息数=%s",
             username,
@@ -456,27 +528,11 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             sum(1 for msg in messages if msg.get("attachments")),
         )
         if export_format == "txt":
-            role_map = {"user": "User", "assistant": "Assistant", "system": "System"}
-            lines = [
-                f"Title: {conv['title']}",
-                f"Model: {conv['model']}",
-                f"Created At: {conv['created_at']}",
-                f"Updated At: {conv['updated_at']}",
-                "",
-            ]
-            for msg in messages:
-                role_label = role_map.get(msg["role"], msg["role"])
-                lines.append(f"[{msg['created_at']}] {role_label}:")
-                lines.append(str(msg["content"]))
-                if msg.get("reasoning"):
-                    lines.append("思考摘要:")
-                    lines.append(str(msg["reasoning"]))
-                for att in msg.get("attachments", []):
-                    lines.append(
-                        f"- Attachment: {att['file_name']} ({att['kind']}, {att['mime_type']})"
-                    )
-                lines.append("")
-            body = "\n".join(lines)
+            body = _build_txt_export_body(
+                conversation=conv,
+                messages=messages,
+                exported_at=exported_at,
+            )
             return Response(
                 body,
                 mimetype="text/plain; charset=utf-8",
@@ -487,6 +543,13 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
         body = json.dumps(
             {
+                "export_meta": {
+                    "format_version": 2,
+                    "exported_at": exported_at,
+                    "message_count": len(messages),
+                    "attachment_count": attachment_count,
+                    "reasoning_message_count": reasoning_message_count,
+                },
                 "conversation": {
                     "id": conv["id"],
                     "title": conv["title"],

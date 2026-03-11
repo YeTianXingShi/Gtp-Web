@@ -8,8 +8,12 @@ const sendBtn = document.getElementById("send-btn");
 const newConvBtn = document.getElementById("new-conv-btn");
 const renameConvBtn = document.getElementById("rename-conv-btn");
 const exportConvBtn = document.getElementById("export-conv-btn");
-const exportFormatSelectEl = document.getElementById("export-format-select");
+const exportMenuEl = document.getElementById("export-menu");
+const exportMenuItemEls = Array.from(document.querySelectorAll("[data-export-format]"));
 const deleteConvBtn = document.getElementById("delete-conv-btn");
+const deleteConfirmPanelEl = document.getElementById("delete-confirm-panel");
+const confirmDeleteBtn = document.getElementById("confirm-delete-btn");
+const cancelDeleteBtn = document.getElementById("cancel-delete-btn");
 const searchInputEl = document.getElementById("search-input");
 const conversationListEl = document.getElementById("conversation-list");
 const fileInputEl = document.getElementById("file-input");
@@ -20,10 +24,13 @@ const state = {
   currentConversationId: null,
   sending: false,
   renaming: false,
+  deleting: false,
   searchKeyword: "",
   editingConversationId: null,
   editingTitleDraft: "",
   pendingFiles: [],
+  exportMenuOpen: false,
+  deleteConfirmOpen: false,
 };
 
 let searchDebounceTimer = null;
@@ -66,6 +73,7 @@ const temporaryMessageObjectUrls = new Set();
 const STREAM_IDLE_TIMEOUT_MS = 30000;
 const STREAM_IDLE_TIMEOUT_SECONDS = Math.floor(STREAM_IDLE_TIMEOUT_MS / 1000);
 let pendingFileSeq = 0;
+const SUPPORTED_EXPORT_FORMATS = new Set(["json", "txt", "md"]);
 
 function escapeHtml(raw) {
   return String(raw ?? "")
@@ -585,18 +593,68 @@ function showNoConversationHint() {
 }
 
 function updateActionButtons() {
-  const busy = state.sending || state.renaming;
+  const busy = state.sending || state.renaming || state.deleting;
   const hasConversation = Number.isInteger(state.currentConversationId);
   sendBtn.disabled = busy;
   newConvBtn.disabled = busy;
   renameConvBtn.disabled = busy || !hasConversation || state.editingConversationId !== null;
   exportConvBtn.disabled = busy || !hasConversation;
-  if (exportFormatSelectEl) {
-    exportFormatSelectEl.disabled = busy || !hasConversation;
+  for (const exportItemEl of exportMenuItemEls) {
+    exportItemEl.disabled = busy || !hasConversation;
   }
   deleteConvBtn.disabled = busy || !hasConversation;
+  if (confirmDeleteBtn) {
+    confirmDeleteBtn.disabled = busy || !hasConversation;
+  }
+  if (cancelDeleteBtn) {
+    cancelDeleteBtn.disabled = busy;
+  }
   modelSelectEl.disabled = busy;
   fileInputEl.disabled = busy;
+
+  if (busy || !hasConversation) {
+    setExportMenuOpen(false);
+    setDeleteConfirmOpen(false);
+  }
+}
+
+function setExportMenuOpen(open, options = {}) {
+  if (!exportMenuEl) return;
+
+  const { focusFirstItem = false } = options;
+  const shouldOpen = Boolean(open) && !exportConvBtn.disabled;
+  state.exportMenuOpen = shouldOpen;
+  exportMenuEl.hidden = !shouldOpen;
+  exportConvBtn.setAttribute("aria-expanded", String(shouldOpen));
+
+  if (!shouldOpen) {
+    return;
+  }
+
+  setDeleteConfirmOpen(false);
+  if (focusFirstItem) {
+    setTimeout(() => {
+      exportMenuItemEls[0]?.focus();
+    }, 0);
+  }
+}
+
+function setDeleteConfirmOpen(open) {
+  if (!deleteConfirmPanelEl) return;
+
+  const shouldOpen = Boolean(open) && !deleteConvBtn.disabled;
+  state.deleteConfirmOpen = shouldOpen;
+  deleteConfirmPanelEl.hidden = !shouldOpen;
+  deleteConvBtn.setAttribute("aria-expanded", String(shouldOpen));
+
+  if (!shouldOpen) {
+    return;
+  }
+
+  setExportMenuOpen(false);
+  setTimeout(() => {
+    confirmDeleteBtn?.focus();
+  }, 0);
 }
 
 function clearInlineRenameState() {
@@ -1103,11 +1161,11 @@ function getExportFileExtension(format) {
   return "json";
 }
 
-async function exportCurrentConversation() {
+async function exportCurrentConversation(format = "json") {
   if (!Number.isInteger(state.currentConversationId)) return;
-  const format = exportFormatSelectEl?.value || "json";
+  const normalizedFormat = SUPPORTED_EXPORT_FORMATS.has(format) ? format : "json";
   const resp = await fetch(
-    `/api/conversations/${state.currentConversationId}/export?format=${encodeURIComponent(format)}`
+    `/api/conversations/${state.currentConversationId}/export?format=${encodeURIComponent(normalizedFormat)}`
   );
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
@@ -1116,7 +1174,7 @@ async function exportCurrentConversation() {
   const blob = await resp.blob();
   const filename =
     getFilenameFromDisposition(resp.headers.get("Content-Disposition")) ||
-    `conversation.${getExportFileExtension(format)}`;
+    `conversation.${getExportFileExtension(normalizedFormat)}`;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -1171,21 +1229,27 @@ async function commitInlineRename() {
 
 async function deleteCurrentConversation() {
   if (!Number.isInteger(state.currentConversationId)) return;
-  const confirmed = window.confirm("确认删除当前会话吗？删除后不可恢复。");
-  if (!confirmed) return;
+  setDeleteConfirmOpen(false);
 
-  await fetchJson(`/api/conversations/${state.currentConversationId}`, {
-    method: "DELETE",
-  });
-  clearInlineRenameState();
-  clearPendingFiles();
+  state.deleting = true;
+  updateActionButtons();
+  try {
+    await fetchJson(`/api/conversations/${state.currentConversationId}`, {
+      method: "DELETE",
+    });
+    clearInlineRenameState();
+    clearPendingFiles();
 
-  await loadConversations();
-  if (state.currentConversationId == null) {
-    showNoConversationHint();
-    return;
+    await loadConversations();
+    if (state.currentConversationId == null) {
+      showNoConversationHint();
+      return;
+    }
+    await loadMessages(state.currentConversationId);
+  } finally {
+    state.deleting = false;
+    updateActionButtons();
   }
-  await loadMessages(state.currentConversationId);
 }
 
 async function refreshConversationsAndMessages() {
@@ -1266,20 +1330,41 @@ renameConvBtn.addEventListener("click", async () => {
 
 exportConvBtn.addEventListener("click", async () => {
   if (state.sending) return;
-  try {
-    await exportCurrentConversation();
-  } catch (err) {
-    addMessage("system", `导出失败：${err}`);
-  }
+  if (!Number.isInteger(state.currentConversationId)) return;
+  setExportMenuOpen(!state.exportMenuOpen, { focusFirstItem: true });
 });
 
 deleteConvBtn.addEventListener("click", async () => {
+  if (state.sending) return;
+  if (!Number.isInteger(state.currentConversationId)) return;
+  setDeleteConfirmOpen(!state.deleteConfirmOpen);
+});
+
+for (const exportMenuItemEl of exportMenuItemEls) {
+  exportMenuItemEl.addEventListener("click", async () => {
+    if (state.sending) return;
+    const format = exportMenuItemEl.dataset.exportFormat || "json";
+    setExportMenuOpen(false);
+    try {
+      await exportCurrentConversation(format);
+    } catch (err) {
+      addMessage("system", `导出失败：${err}`);
+    }
+  });
+}
+
+confirmDeleteBtn?.addEventListener("click", async () => {
   if (state.sending) return;
   try {
     await deleteCurrentConversation();
   } catch (err) {
     addMessage("system", `删除失败：${err}`);
   }
+});
+
+cancelDeleteBtn?.addEventListener("click", () => {
+  setDeleteConfirmOpen(false);
+  deleteConvBtn.focus();
 });
 
 fileInputEl.addEventListener("change", () => {
@@ -1334,6 +1419,38 @@ searchInputEl.addEventListener("input", () => {
       addMessage("system", `搜索失败：${err}`);
     }
   }, 250);
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+
+  const exportMenuRoot = exportMenuEl?.parentElement;
+  if (state.exportMenuOpen && exportMenuRoot && !exportMenuRoot.contains(target)) {
+    setExportMenuOpen(false);
+  }
+
+  const deleteConfirmRoot = deleteConfirmPanelEl?.parentElement;
+  if (state.deleteConfirmOpen && deleteConfirmRoot && !deleteConfirmRoot.contains(target)) {
+    setDeleteConfirmOpen(false);
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+
+  if (state.exportMenuOpen) {
+    event.preventDefault();
+    setExportMenuOpen(false);
+    exportConvBtn.focus();
+    return;
+  }
+
+  if (state.deleteConfirmOpen) {
+    event.preventDefault();
+    setDeleteConfirmOpen(false);
+    deleteConvBtn.focus();
+  }
 });
 
 if (adminBtn) {

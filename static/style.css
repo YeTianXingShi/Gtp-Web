@@ -243,15 +243,68 @@ label span {
   gap: 8px;
 }
 
-.side-actions button,
-.side-actions .side-select {
+.side-actions button {
   height: 42px;
   min-height: 42px;
   padding: 0 10px;
 }
 
-.side-actions .side-select {
+.side-action-stack {
   grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.action-menu,
+.confirm-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(88, 145, 228, 0.34);
+  background: rgba(8, 16, 33, 0.96);
+  box-shadow: var(--shadow-neon);
+}
+
+.action-menu-item {
+  justify-content: flex-start;
+  width: 100%;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(72, 142, 228, 0.34);
+  background: rgba(14, 29, 57, 0.92);
+  color: #d8ebff;
+  box-shadow: none;
+}
+
+.action-menu-item:hover:not(:disabled) {
+  background: rgba(23, 45, 86, 0.98);
+  box-shadow: none;
+}
+
+.confirm-panel {
+  border-color: rgba(255, 122, 151, 0.38);
+  background: rgba(33, 10, 20, 0.96);
+}
+
+.confirm-panel-title {
+  color: #ffe6eb;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.confirm-panel-desc {
+  color: #f2beca;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.confirm-panel-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
 }
 
 .conversation-list {

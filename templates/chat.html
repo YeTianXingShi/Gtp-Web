@@ -33,13 +33,43 @@
         <div class="side-actions">
           <button id="new-conv-btn" type="button">+ 新对话</button>
           <button id="rename-conv-btn" class="btn-secondary" type="button">重命名</button>
-          <select id="export-format-select" class="side-select" aria-label="选择导出格式">
-            <option value="json">导出为 JSON</option>
-            <option value="txt">导出为 TXT</option>
-            <option value="md">导出为 Markdown</option>
-          </select>
-          <button id="export-conv-btn" class="btn-secondary" type="button">导出</button>
-          <button id="delete-conv-btn" class="btn-danger" type="button">删除</button>
+          <div class="side-action-stack">
+            <button
+              id="export-conv-btn"
+              class="btn-secondary"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="export-menu"
+            >
+              导出
+            </button>
+            <div id="export-menu" class="action-menu" hidden>
+              <button class="action-menu-item" type="button" data-export-format="json">导出为 JSON</button>
+              <button class="action-menu-item" type="button" data-export-format="txt">导出为 TXT</button>
+              <button class="action-menu-item" type="button" data-export-format="md">导出为 Markdown</button>
+            </div>
+          </div>
+          <div class="side-action-stack">
+            <button
+              id="delete-conv-btn"
+              class="btn-danger"
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded="false"
+              aria-controls="delete-confirm-panel"
+            >
+              删除
+            </button>
+            <div id="delete-confirm-panel" class="confirm-panel" hidden>
+              <div class="confirm-panel-title">确认删除当前会话？</div>
+              <div class="confirm-panel-desc">删除后不可恢复，按 Enter 可直接确认。</div>
+              <div class="confirm-panel-actions">
+                <button id="confirm-delete-btn" class="btn-danger" type="button">确认删除</button>
+                <button id="cancel-delete-btn" class="btn-secondary" type="button">取消</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div id="conversation-list" class="conversation-list"></div>
       </aside>

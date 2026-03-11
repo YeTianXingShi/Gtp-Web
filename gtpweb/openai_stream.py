@@ -7,6 +7,15 @@ from typing import Any
 from openai import APIStatusError
 
 
+_OPENAI_REASONING_MODEL_PREFIXES = (
+    "gpt-5",
+    "o1",
+    "o3",
+    "o4",
+    "computer-use-preview",
+)
+
+
 def sse_payload(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -50,6 +59,74 @@ def extract_text_delta(event_obj: Any) -> str:
             if isinstance(content, str):
                 return content
     return ""
+
+
+def extract_reasoning_summary_delta(event_obj: Any) -> str:
+    event_type = get_obj_value(event_obj, "type")
+    if event_type == "response.reasoning_summary_text.delta":
+        delta = get_obj_value(event_obj, "delta")
+        return delta if isinstance(delta, str) else ""
+    return ""
+
+
+def supports_openai_reasoning(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    return any(normalized.startswith(prefix) for prefix in _OPENAI_REASONING_MODEL_PREFIXES)
+
+
+def _build_response_input_content(content: Any) -> str | list[dict[str, Any]]:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+
+    converted: list[dict[str, Any]] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("type", "")).strip().lower()
+        if item_type == "text":
+            text = item.get("text")
+            if isinstance(text, str) and text:
+                converted.append({"type": "input_text", "text": text})
+            continue
+        if item_type != "image_url":
+            continue
+
+        image_url = item.get("image_url")
+        if not isinstance(image_url, dict):
+            continue
+        url = image_url.get("url")
+        if not isinstance(url, str) or not url:
+            continue
+        image_item: dict[str, Any] = {"type": "input_image", "image_url": url}
+        detail = image_url.get("detail")
+        if isinstance(detail, str) and detail:
+            image_item["detail"] = detail
+        converted.append(image_item)
+
+    return converted if converted else ""
+
+
+def build_openai_response_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    response_input: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role", "user")).strip().lower() or "user"
+        if role not in {"user", "assistant", "system", "developer"}:
+            continue
+        content = _build_response_input_content(message.get("content"))
+        if content == "":
+            continue
+
+        item: dict[str, Any] = {
+            "type": "message",
+            "role": role,
+            "content": content,
+        }
+        if role == "assistant":
+            item["phase"] = "final_answer"
+        response_input.append(item)
+    return response_input
 
 
 def extract_error_message(data: dict[str, Any], fallback: str = "AI 服务返回错误") -> str:

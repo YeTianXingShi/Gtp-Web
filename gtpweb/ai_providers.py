@@ -34,6 +34,11 @@ class ModelGroup:
 _DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.DOTALL)
 
 
+def supports_google_thinking(model_name: str) -> bool:
+    normalized = str(model_name or "").strip().lower()
+    return normalized.startswith("gemini-2.5") or normalized.startswith("gemini-3")
+
+
 def build_model_option(provider: str, model_name: str) -> ModelOption:
     group_label = PROVIDER_LABELS.get(provider, provider)
     return ModelOption(
@@ -172,29 +177,74 @@ def build_google_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]
     return contents
 
 
+def build_google_generate_content_config(
+    *,
+    model_name: str,
+    include_thoughts: bool,
+    thinking_level: str,
+    thinking_budget: int | None,
+) -> Any | None:
+    if (not include_thoughts) or (not supports_google_thinking(model_name)):
+        return None
+
+    try:
+        from google.genai import types
+    except ImportError as exc:
+        raise RuntimeError(
+            "当前环境缺少 `google-genai` 依赖，请先执行 `pip install -r requirements.txt`。"
+        ) from exc
+
+    thinking_kwargs: dict[str, Any] = {"include_thoughts": True}
+    normalized_model = str(model_name or "").strip().lower()
+    if thinking_budget is not None and normalized_model.startswith("gemini-2.5"):
+        thinking_kwargs["thinking_budget"] = thinking_budget
+    elif thinking_level:
+        thinking_kwargs["thinking_level"] = thinking_level
+
+    return types.GenerateContentConfig(
+        thinking_config=types.ThinkingConfig(**thinking_kwargs)
+    )
+
+
+def _extract_google_parts(event_obj: Any) -> list[dict[str, Any]]:
+    event_dict = to_dict(event_obj)
+    candidates = event_dict.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return []
+
+    first_candidate = candidates[0]
+    if not isinstance(first_candidate, dict):
+        return []
+    content = first_candidate.get("content")
+    if not isinstance(content, dict):
+        return []
+    parts = content.get("parts")
+    return parts if isinstance(parts, list) else []
+
+
 def extract_google_text_delta(event_obj: Any) -> str:
     text = get_obj_value(event_obj, "text")
     if isinstance(text, str):
         return text
 
-    event_dict = to_dict(event_obj)
-    candidates = event_dict.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        return ""
-
-    first_candidate = candidates[0]
-    if not isinstance(first_candidate, dict):
-        return ""
-    content = first_candidate.get("content")
-    if not isinstance(content, dict):
-        return ""
-    parts = content.get("parts")
-    if not isinstance(parts, list):
-        return ""
-
     fragments: list[str] = []
-    for part in parts:
+    for part in _extract_google_parts(event_obj):
         if not isinstance(part, dict):
+            continue
+        if part.get("thought") is True:
+            continue
+        fragment = part.get("text")
+        if isinstance(fragment, str) and fragment:
+            fragments.append(fragment)
+    return "".join(fragments)
+
+
+def extract_google_reasoning_delta(event_obj: Any) -> str:
+    fragments: list[str] = []
+    for part in _extract_google_parts(event_obj):
+        if not isinstance(part, dict):
+            continue
+        if part.get("thought") is not True:
             continue
         fragment = part.get("text")
         if isinstance(fragment, str) and fragment:

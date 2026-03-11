@@ -14,6 +14,7 @@ from gtpweb.attachments import parse_allowed_attachment_exts
 from gtpweb.config import (
     DEFAULT_OPENAI_IMAGE_MODEL,
     AppConfig,
+    parse_bool,
     parse_image_tool_provider,
     parse_models,
 )
@@ -25,10 +26,15 @@ HOT_RELOADABLE_ENV_KEYS = {
     "OPENAI_API_KEY",
     "OPENAI_MODELS",
     "OPENAI_IMAGE_MODEL",
+    "OPENAI_REASONING_EFFORT",
+    "OPENAI_REASONING_SUMMARY",
     "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
     "GOOGLE_MODELS",
     "GOOGLE_IMAGE_MODEL",
+    "GOOGLE_INCLUDE_THOUGHTS",
+    "GOOGLE_THINKING_LEVEL",
+    "GOOGLE_THINKING_BUDGET",
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
@@ -43,10 +49,15 @@ class RuntimeSettings:
     openai_api_key: str
     openai_models: list[str]
     openai_image_model: str
+    openai_reasoning_effort: str
+    openai_reasoning_summary: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
     google_image_model: str
+    google_include_thoughts: bool
+    google_thinking_level: str
+    google_thinking_budget: int | None
     models: list[str]
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
@@ -114,6 +125,19 @@ def build_runtime_settings(
         parsed = safe_int(str(env_values[key]))
         return parsed or fallback
 
+    def choose_optional_int(key: str, fallback: int | None) -> int | None:
+        if key not in env_values:
+            return fallback
+        value = str(env_values[key]).strip()
+        if not value:
+            return None
+        return safe_int(value)
+
+    def choose_bool(key: str, fallback: bool) -> bool:
+        if key not in env_values:
+            return fallback
+        return parse_bool(str(env_values[key]), default=fallback)
+
     def choose_models(key: str, fallback: list[str]) -> list[str]:
         if key not in env_values:
             return list(fallback)
@@ -140,6 +164,16 @@ def build_runtime_settings(
     openai_api_key = choose_text("OPENAI_API_KEY", base_config.openai_api_key, allow_empty=True)
     openai_models = choose_models("OPENAI_MODELS", base_config.openai_models)
     openai_image_model = choose_openai_image_model(openai_models)
+    openai_reasoning_effort = choose_text(
+        "OPENAI_REASONING_EFFORT",
+        base_config.openai_reasoning_effort,
+        allow_empty=True,
+    ).lower()
+    openai_reasoning_summary = choose_text(
+        "OPENAI_REASONING_SUMMARY",
+        base_config.openai_reasoning_summary,
+        allow_empty=True,
+    ).lower()
     google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = choose_models("GOOGLE_MODELS", base_config.google_models)
@@ -147,6 +181,19 @@ def build_runtime_settings(
         "GOOGLE_IMAGE_MODEL",
         base_config.google_image_model,
         allow_empty=True,
+    )
+    google_include_thoughts = choose_bool(
+        "GOOGLE_INCLUDE_THOUGHTS",
+        base_config.google_include_thoughts,
+    )
+    google_thinking_level = choose_text(
+        "GOOGLE_THINKING_LEVEL",
+        base_config.google_thinking_level,
+        allow_empty=True,
+    ).lower()
+    google_thinking_budget = choose_optional_int(
+        "GOOGLE_THINKING_BUDGET",
+        base_config.google_thinking_budget,
     )
 
     use_openai = bool(openai_models or openai_image_model)
@@ -175,10 +222,15 @@ def build_runtime_settings(
         openai_api_key=openai_api_key,
         openai_models=openai_models,
         openai_image_model=openai_image_model,
+        openai_reasoning_effort=openai_reasoning_effort,
+        openai_reasoning_summary=openai_reasoning_summary,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
         google_image_model=google_image_model,
+        google_include_thoughts=google_include_thoughts,
+        google_thinking_level=google_thinking_level,
+        google_thinking_budget=google_thinking_budget,
         models=models,
         model_options=model_options,
         max_upload_mb=max_upload_mb,

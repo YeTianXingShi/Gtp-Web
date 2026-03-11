@@ -39,13 +39,13 @@ ENV_GROUP_SPECS = (
         key="openai",
         filename="openai.env",
         label="OpenAI 配置",
-        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY、OPENAI_MODELS 与 OPENAI_IMAGE_MODEL。",
+        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY、OPENAI_MODELS、OPENAI_IMAGE_MODEL 与推理摘要相关配置。",
     ),
     EnvGroupSpec(
         key="google",
         filename="google.env",
         label="Google Gemini 配置",
-        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY、GOOGLE_MODELS 与 GOOGLE_IMAGE_MODEL。",
+        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY、GOOGLE_MODELS、GOOGLE_IMAGE_MODEL 与 thinking 配置。",
     ),
     EnvGroupSpec(
         key="storage",
@@ -80,10 +80,15 @@ class AppConfig:
     openai_api_key: str
     openai_models: list[str]
     openai_image_model: str
+    openai_reasoning_effort: str
+    openai_reasoning_summary: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
     google_image_model: str
+    google_include_thoughts: bool
+    google_thinking_level: str
+    google_thinking_budget: int | None
     db_file: Path
     upload_dir: Path
     max_upload_mb: int
@@ -171,11 +176,16 @@ def load_config() -> AppConfig:
         openai_image_model = DEFAULT_OPENAI_IMAGE_MODEL if openai_models else ""
     else:
         openai_image_model = raw_openai_image_model.strip()
+    openai_reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower()
+    openai_reasoning_summary = os.getenv("OPENAI_REASONING_SUMMARY", "auto").strip().lower()
 
     google_base_url = os.getenv("GOOGLE_BASE_URL", "").strip()
     google_api_key = os.getenv("GOOGLE_API_KEY", "")
     google_models = parse_models(os.getenv("GOOGLE_MODELS", ""), allow_empty=True)
     google_image_model = os.getenv("GOOGLE_IMAGE_MODEL", "").strip()
+    google_include_thoughts = parse_bool(os.getenv("GOOGLE_INCLUDE_THOUGHTS", "1"), default=True)
+    google_thinking_level = os.getenv("GOOGLE_THINKING_LEVEL", "medium").strip().lower()
+    google_thinking_budget = safe_int(os.getenv("GOOGLE_THINKING_BUDGET", ""))
 
     db_file = Path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
     upload_dir = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
@@ -214,10 +224,15 @@ def load_config() -> AppConfig:
         openai_api_key=openai_api_key,
         openai_models=openai_models,
         openai_image_model=openai_image_model,
+        openai_reasoning_effort=openai_reasoning_effort,
+        openai_reasoning_summary=openai_reasoning_summary,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
         google_image_model=google_image_model,
+        google_include_thoughts=google_include_thoughts,
+        google_thinking_level=google_thinking_level,
+        google_thinking_budget=google_thinking_budget,
         db_file=db_file,
         upload_dir=upload_dir,
         max_upload_mb=max_upload_mb,

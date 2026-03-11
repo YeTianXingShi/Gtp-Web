@@ -13,7 +13,9 @@ from werkzeug.datastructures import FileStorage
 from gtpweb.ai_providers import (
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
+    build_google_generate_content_config,
     build_google_contents,
+    extract_google_reasoning_delta,
     extract_google_text_delta,
     resolve_model_option,
 )
@@ -36,12 +38,36 @@ from gtpweb.attachments import (
 )
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
-from gtpweb.openai_stream import extract_status_error_message, extract_text_delta, sse_payload
+from gtpweb.openai_stream import (
+    build_openai_response_input,
+    extract_reasoning_summary_delta,
+    extract_status_error_message,
+    extract_text_delta,
+    sse_payload,
+    supports_openai_reasoning,
+)
 from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
 logger = logging.getLogger(__name__)
+
+
+def _build_openai_reasoning_config(
+    *,
+    model_name: str,
+    reasoning_effort: str,
+    reasoning_summary: str,
+) -> dict[str, Any] | None:
+    if not supports_openai_reasoning(model_name):
+        return None
+
+    config: dict[str, Any] = {}
+    if reasoning_effort:
+        config["effort"] = reasoning_effort
+    if reasoning_summary:
+        config["summary"] = reasoning_summary
+    return config or None
 
 
 def _get_current_user(users_file: Path) -> str | None:
@@ -392,6 +418,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
 
         def generate() -> Any:
             assistant_parts: list[str] = []
+            reasoning_parts: list[str] = []
             has_error = False
             client_disconnected = False
             delta_count = 0
@@ -408,34 +435,75 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 if selected_provider == PROVIDER_OPENAI:
                     if openai_client is None:
                         raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
-                    request_kwargs: dict[str, Any] = {
-                        "model": upstream_model,
-                        "messages": completion_messages,
-                        "stream": True,
-                    }
-                    stream = openai_client.chat.completions.create(**request_kwargs)
-                    for event_obj in stream:
-                        delta = extract_text_delta(event_obj)
-                        if delta:
-                            assistant_parts.append(delta)
-                            delta_count += 1
-                            if delta_count % 20 == 0:
-                                logger.debug(
-                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                    conversation_id,
-                                    delta_count,
-                                    len("".join(assistant_parts)),
-                                )
-                            yield sse_payload({"type": "delta", "text": delta})
+                    reasoning_config = _build_openai_reasoning_config(
+                        model_name=upstream_model,
+                        reasoning_effort=runtime_settings.openai_reasoning_effort,
+                        reasoning_summary=runtime_settings.openai_reasoning_summary,
+                    )
+                    if reasoning_config is not None:
+                        request_kwargs = {
+                            "model": upstream_model,
+                            "input": build_openai_response_input(completion_messages),
+                            "reasoning": reasoning_config,
+                            "stream": True,
+                        }
+                        stream = openai_client.responses.create(**request_kwargs)
+                        for event_obj in stream:
+                            reasoning_delta = extract_reasoning_summary_delta(event_obj)
+                            if reasoning_delta:
+                                reasoning_parts.append(reasoning_delta)
+                                yield sse_payload({"type": "reasoning", "text": reasoning_delta})
 
-                    if not assistant_parts and not has_error:
-                        has_error = True
-                        yield sse_payload(
-                            {
-                                "type": "error",
-                                "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
-                            }
-                        )
+                            delta = extract_text_delta(event_obj)
+                            if delta:
+                                assistant_parts.append(delta)
+                                delta_count += 1
+                                if delta_count % 20 == 0:
+                                    logger.debug(
+                                        "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                        conversation_id,
+                                        delta_count,
+                                        len("".join(assistant_parts)),
+                                    )
+                                yield sse_payload({"type": "delta", "text": delta})
+
+                        if not assistant_parts and not has_error:
+                            has_error = True
+                            yield sse_payload(
+                                {
+                                    "type": "error",
+                                    "error": "请求上游成功但未收到流式文本，请确认网关支持 Responses API 流式。",
+                                }
+                            )
+                    else:
+                        request_kwargs = {
+                            "model": upstream_model,
+                            "messages": completion_messages,
+                            "stream": True,
+                        }
+                        stream = openai_client.chat.completions.create(**request_kwargs)
+                        for event_obj in stream:
+                            delta = extract_text_delta(event_obj)
+                            if delta:
+                                assistant_parts.append(delta)
+                                delta_count += 1
+                                if delta_count % 20 == 0:
+                                    logger.debug(
+                                        "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                        conversation_id,
+                                        delta_count,
+                                        len("".join(assistant_parts)),
+                                    )
+                                yield sse_payload({"type": "delta", "text": delta})
+
+                        if not assistant_parts and not has_error:
+                            has_error = True
+                            yield sse_payload(
+                                {
+                                    "type": "error",
+                                    "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
+                                }
+                            )
                 elif selected_provider == PROVIDER_GOOGLE:
                     if google_client is None:
                         raise RuntimeError("Google Gemini 客户端未初始化，请检查 GOOGLE 配置。")
@@ -443,8 +511,21 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                         "model": upstream_model,
                         "contents": build_google_contents(completion_messages),
                     }
+                    google_config = build_google_generate_content_config(
+                        model_name=upstream_model,
+                        include_thoughts=runtime_settings.google_include_thoughts,
+                        thinking_level=runtime_settings.google_thinking_level,
+                        thinking_budget=runtime_settings.google_thinking_budget,
+                    )
+                    if google_config is not None:
+                        request_kwargs["config"] = google_config
                     stream = google_client.models.generate_content_stream(**request_kwargs)
                     for event_obj in stream:
+                        reasoning_delta = extract_google_reasoning_delta(event_obj)
+                        if reasoning_delta:
+                            reasoning_parts.append(reasoning_delta)
+                            yield sse_payload({"type": "reasoning", "text": reasoning_delta})
+
                         delta = extract_google_text_delta(event_obj)
                         if delta:
                             assistant_parts.append(delta)
@@ -470,11 +551,12 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     raise RuntimeError(f"不支持的模型来源: {selected_provider}")
 
                 logger.info(
-                    "上游模型调用完成: 会话ID=%s 来源=%s 分片数=%s 输出字符=%s 耗时毫秒=%.2f",
+                    "上游模型调用完成: 会话ID=%s 来源=%s 分片数=%s 输出字符=%s 推理摘要字符=%s 耗时毫秒=%.2f",
                     conversation_id,
                     selected_provider,
                     delta_count,
                     len("".join(assistant_parts)),
+                    len("".join(reasoning_parts)),
                     (time.perf_counter() - started_at) * 1000,
                 )
 

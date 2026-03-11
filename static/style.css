@@ -357,6 +357,58 @@ label span {
   font-size: 14px;
 }
 
+.message-reasoning {
+  margin: 0 0 10px;
+  border: 1px solid rgba(149, 193, 255, 0.24);
+  border-radius: 11px;
+  background: rgba(10, 24, 44, 0.34);
+  overflow: hidden;
+}
+
+.message-reasoning summary {
+  cursor: pointer;
+  padding: 8px 11px;
+  color: #c9dcff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  list-style: none;
+}
+
+.message-reasoning summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-reasoning summary::before {
+  content: "▾";
+  display: inline-block;
+  margin-right: 6px;
+  color: rgba(170, 204, 255, 0.9);
+}
+
+.message-reasoning:not([open]) summary::before {
+  content: "▸";
+}
+
+.message-reasoning-content {
+  padding: 0 11px 10px;
+  color: #aecaef;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.message-reasoning-content.is-streaming {
+  white-space: pre-wrap;
+}
+
+.message-reasoning-content > :first-child {
+  margin-top: 0;
+}
+
+.message-reasoning-content > :last-child {
+  margin-bottom: 0;
+}
+
 .message-content.is-streaming {
   white-space: pre-wrap;
 }

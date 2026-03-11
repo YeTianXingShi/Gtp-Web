@@ -322,6 +322,36 @@ function addMessage(role, content, options = {}) {
   return div;
 }
 
+function ensureReasoningPanel(messageEl) {
+  let panelEl = messageEl.querySelector(".message-reasoning");
+  let contentEl = panelEl?.querySelector(".message-reasoning-content") || null;
+  if (panelEl && contentEl) {
+    return { panelEl, contentEl };
+  }
+
+  panelEl = document.createElement("details");
+  panelEl.className = "message-reasoning";
+  panelEl.hidden = true;
+  panelEl.open = true;
+
+  const summaryEl = document.createElement("summary");
+  summaryEl.textContent = "思考摘要";
+  panelEl.appendChild(summaryEl);
+
+  contentEl = document.createElement("div");
+  contentEl.className = "message-reasoning-content";
+  panelEl.appendChild(contentEl);
+
+  const messageContentEl = messageEl.querySelector(".message-content");
+  if (messageContentEl) {
+    messageEl.insertBefore(panelEl, messageContentEl);
+  } else {
+    messageEl.appendChild(panelEl);
+  }
+
+  return { panelEl, contentEl };
+}
+
 function clearMessages() {
   revokeAllTemporaryMessageObjectUrls();
   messagesEl.innerHTML = "";
@@ -811,16 +841,27 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
 
   const controller = new AbortController();
   const assistantContentEl = assistantEl.querySelector(".message-content");
+  const reasoningPanel = ensureReasoningPanel(assistantEl);
+  const reasoningPanelEl = reasoningPanel.panelEl;
+  const reasoningContentEl = reasoningPanel.contentEl;
   let idleTimer = null;
   let buffer = "";
   let streamError = "";
   let finalReply = "";
+  let finalReasoning = "";
   let pendingStreamText = "";
+  let pendingReasoningText = "";
   let streamRenderHandle = null;
+  let reasoningRenderHandle = null;
   let streamTextNode = null;
+  let reasoningTextNode = null;
   let sawDoneEvent = false;
   let shouldStopReading = false;
   let streamAbortReason = "";
+
+  const scrollMessagesToBottom = () => {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  };
 
   const clearIdleTimer = () => {
     if (idleTimer != null) {
@@ -854,6 +895,15 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     if (!streamTextNode || !pendingStreamText) return;
     streamTextNode.appendData(pendingStreamText);
     pendingStreamText = "";
+    scrollMessagesToBottom();
+  };
+
+  const flushReasoningText = () => {
+    reasoningRenderHandle = null;
+    if (!reasoningTextNode || !pendingReasoningText) return;
+    reasoningTextNode.appendData(pendingReasoningText);
+    pendingReasoningText = "";
+    scrollMessagesToBottom();
   };
 
   const scheduleStreamTextFlush = () => {
@@ -862,13 +912,49 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
     streamRenderHandle = scheduleUiFrame(flushStreamText);
   };
 
+  const revealReasoningPanel = () => {
+    if (!reasoningPanelEl || !reasoningContentEl) return;
+    reasoningPanelEl.hidden = false;
+    reasoningPanelEl.classList.add("is-streaming");
+    reasoningContentEl.classList.add("is-streaming");
+    if (reasoningTextNode) return;
+    reasoningContentEl.textContent = "";
+    reasoningTextNode = document.createTextNode("");
+    reasoningContentEl.appendChild(reasoningTextNode);
+  };
+
+  const scheduleReasoningTextFlush = () => {
+    if (!reasoningContentEl || !reasoningTextNode || !pendingReasoningText) return;
+    if (reasoningRenderHandle != null) return;
+    reasoningRenderHandle = scheduleUiFrame(flushReasoningText);
+  };
+
+  const finalizeReasoningRender = () => {
+    if (!reasoningPanelEl || !reasoningContentEl) return;
+    cancelUiFrame(reasoningRenderHandle);
+    reasoningRenderHandle = null;
+    flushReasoningText();
+    reasoningPanelEl.classList.remove("is-streaming");
+    reasoningContentEl.classList.remove("is-streaming");
+    if (!finalReasoning) {
+      reasoningPanelEl.hidden = true;
+      reasoningContentEl.textContent = "";
+      reasoningTextNode = null;
+      return;
+    }
+    reasoningPanelEl.hidden = false;
+    reasoningContentEl.innerHTML = renderMarkdown(finalReasoning);
+  };
+
   const finalizeStreamRender = () => {
     if (!assistantContentEl) return;
     cancelUiFrame(streamRenderHandle);
     streamRenderHandle = null;
     flushStreamText();
+    finalizeReasoningRender();
     assistantContentEl.classList.remove("is-streaming");
     assistantContentEl.innerHTML = renderMarkdown(finalReply);
+    scrollMessagesToBottom();
   };
 
   if (assistantContentEl) {
@@ -915,7 +1001,12 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
       resetIdleTimer();
       buffer += decoder.decode(value, { stream: true });
       buffer = parseSseEvents(buffer, (event) => {
-        if (event.type === "delta" && typeof event.text === "string") {
+        if (event.type === "reasoning" && typeof event.text === "string") {
+          finalReasoning += event.text;
+          pendingReasoningText += event.text;
+          revealReasoningPanel();
+          scheduleReasoningTextFlush();
+        } else if (event.type === "delta" && typeof event.text === "string") {
           finalReply += event.text;
           pendingStreamText += event.text;
           scheduleStreamTextFlush();
@@ -947,7 +1038,10 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
 
   if (buffer) {
     parseSseEvents(buffer + "\n\n", (event) => {
-      if (event.type === "delta" && typeof event.text === "string") {
+      if (event.type === "reasoning" && typeof event.text === "string") {
+        finalReasoning += event.text;
+        pendingReasoningText += event.text;
+      } else if (event.type === "delta" && typeof event.text === "string") {
         finalReply += event.text;
         pendingStreamText += event.text;
       } else if (event.type === "error" && typeof event.error === "string") {

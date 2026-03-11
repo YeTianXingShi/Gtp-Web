@@ -708,8 +708,22 @@ label span {
   filter: brightness(1.05);
 }
 
-.input-row textarea {
+.prompt-field {
   grid-area: prompt;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input-shortcut-hint {
+  padding: 0 2px;
+  color: #7f98bc;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.input-row textarea {
   min-height: 54px;
   max-height: 170px;
   resize: vertical;

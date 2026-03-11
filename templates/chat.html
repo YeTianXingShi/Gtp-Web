@@ -52,7 +52,10 @@
             <input id="file-input" type="file" multiple />
             <div id="selected-files" class="selected-files"></div>
           </div>
-          <textarea id="prompt" rows="3" placeholder="输入你的问题（可选，可仅发送附件）..."></textarea>
+          <div class="prompt-field">
+            <textarea id="prompt" rows="3" placeholder="输入你的问题（可选，可仅发送附件）..."></textarea>
+            <div class="input-shortcut-hint">Enter 发送，Shift + Enter 换行</div>
+          </div>
           <button id="send-btn" type="submit">发送</button>
         </form>
       </section>

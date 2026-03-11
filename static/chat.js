@@ -1288,6 +1288,20 @@ fileInputEl.addEventListener("change", () => {
   appendPendingFiles(incoming, "picker");
 });
 
+promptEl.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.isComposing || event.keyCode === 229) return;
+
+  event.preventDefault();
+  if (state.sending) return;
+  if (typeof chatForm.requestSubmit === "function") {
+    chatForm.requestSubmit();
+    return;
+  }
+  sendBtn.click();
+});
+
 promptEl.addEventListener("paste", (event) => {
   const clipboardData = event.clipboardData;
   if (!clipboardData) return;

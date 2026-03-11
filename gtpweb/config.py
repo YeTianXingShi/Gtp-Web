@@ -202,67 +202,81 @@ def _parse_optional_text(raw_value: Any, *, context: str, lowercase: bool = Fals
 
 
 
-def _parse_reasoning_settings(raw_value: Any, *, context: str) -> OpenAIReasoningSettings | None:
+def _parse_reasoning_settings(
+    raw_value: Any,
+    *,
+    context: str,
+    base_settings: OpenAIReasoningSettings | None = None,
+) -> OpenAIReasoningSettings:
+    default_effort = "" if base_settings is None else base_settings.effort
+    default_summary = "" if base_settings is None else base_settings.summary
+
     if raw_value is None or raw_value is False:
-        return None
+        return OpenAIReasoningSettings(
+            enabled=False,
+            effort=default_effort,
+            summary=default_summary,
+        )
     if raw_value is True:
         raw_value = {}
     if not isinstance(raw_value, dict):
         raise ValueError(f"{context} 必须是对象、true/false 或 null")
+
+    effort = default_effort
+    if "effort" in raw_value:
+        effort = _parse_optional_text(raw_value.get("effort"), context=f"{context}.effort", lowercase=True)
+
+    summary = default_summary
+    if "summary" in raw_value:
+        summary = _parse_optional_text(raw_value.get("summary"), context=f"{context}.summary", lowercase=True)
+
     return OpenAIReasoningSettings(
-        effort=_parse_optional_text(raw_value.get("effort"), context=f"{context}.effort", lowercase=True),
-        summary=_parse_optional_text(raw_value.get("summary"), context=f"{context}.summary", lowercase=True),
+        enabled=_parse_json_bool(raw_value.get("enabled"), context=f"{context}.enabled", default=True),
+        effort=effort,
+        summary=summary,
     )
 
 
 
-def _merge_reasoning_settings(
-    base_settings: OpenAIReasoningSettings | None,
-    override_settings: OpenAIReasoningSettings | None,
-) -> OpenAIReasoningSettings | None:
-    if override_settings is None:
-        return base_settings
-    if base_settings is None:
-        return override_settings
-    return OpenAIReasoningSettings(
-        effort=override_settings.effort or base_settings.effort,
-        summary=override_settings.summary or base_settings.summary,
-    )
+def _parse_thinking_settings(
+    raw_value: Any,
+    *,
+    context: str,
+    base_settings: GoogleThinkingSettings | None = None,
+) -> GoogleThinkingSettings:
+    default_include_thoughts = True if base_settings is None else base_settings.include_thoughts
+    default_level = "" if base_settings is None else base_settings.level
+    default_budget = None if base_settings is None else base_settings.budget
 
-
-
-def _parse_thinking_settings(raw_value: Any, *, context: str) -> GoogleThinkingSettings | None:
     if raw_value is None or raw_value is False:
-        return None
+        return GoogleThinkingSettings(
+            enabled=False,
+            include_thoughts=default_include_thoughts,
+            level=default_level,
+            budget=default_budget,
+        )
     if raw_value is True:
         raw_value = {}
     if not isinstance(raw_value, dict):
         raise ValueError(f"{context} 必须是对象、true/false 或 null")
-    budget = safe_int(raw_value.get("budget"))
+
+    level = default_level
+    if "level" in raw_value:
+        level = _parse_optional_text(raw_value.get("level"), context=f"{context}.level", lowercase=True)
+
+    budget = default_budget
+    if "budget" in raw_value:
+        budget = safe_int(raw_value.get("budget"))
+
     return GoogleThinkingSettings(
+        enabled=_parse_json_bool(raw_value.get("enabled"), context=f"{context}.enabled", default=True),
         include_thoughts=_parse_json_bool(
             raw_value.get("include_thoughts"),
             context=f"{context}.include_thoughts",
-            default=True,
+            default=default_include_thoughts,
         ),
-        level=_parse_optional_text(raw_value.get("level"), context=f"{context}.level", lowercase=True),
+        level=level,
         budget=budget,
-    )
-
-
-
-def _merge_thinking_settings(
-    base_settings: GoogleThinkingSettings | None,
-    override_settings: GoogleThinkingSettings | None,
-) -> GoogleThinkingSettings | None:
-    if override_settings is None:
-        return base_settings
-    if base_settings is None:
-        return override_settings
-    return GoogleThinkingSettings(
-        include_thoughts=override_settings.include_thoughts,
-        level=override_settings.level or base_settings.level,
-        budget=override_settings.budget if override_settings.budget is not None else base_settings.budget,
     )
 
 
@@ -297,22 +311,20 @@ def _parse_provider_model(
 
     if provider == PROVIDER_OPENAI and isinstance(raw_item, dict):
         raw_reasoning = raw_data.get("reasoning", MISSING)
-        if raw_reasoning is False or raw_reasoning is None:
-            openai_reasoning = None
-        elif raw_reasoning is not MISSING:
-            openai_reasoning = _merge_reasoning_settings(
-                default_reasoning,
-                _parse_reasoning_settings(raw_reasoning, context=f"{context}.reasoning"),
+        if raw_reasoning is not MISSING:
+            openai_reasoning = _parse_reasoning_settings(
+                raw_reasoning,
+                context=f"{context}.reasoning",
+                base_settings=default_reasoning,
             )
 
     if provider == PROVIDER_GOOGLE and isinstance(raw_item, dict):
         raw_thinking = raw_data.get("thinking", MISSING)
-        if raw_thinking is False or raw_thinking is None:
-            google_thinking = None
-        elif raw_thinking is not MISSING:
-            google_thinking = _merge_thinking_settings(
-                default_thinking,
-                _parse_thinking_settings(raw_thinking, context=f"{context}.thinking"),
+        if raw_thinking is not MISSING:
+            google_thinking = _parse_thinking_settings(
+                raw_thinking,
+                context=f"{context}.thinking",
+                base_settings=default_thinking,
             )
 
     return ProviderModelConfig(

@@ -18,12 +18,14 @@ PROVIDER_LABELS = {
 
 @dataclass(frozen=True)
 class OpenAIReasoningSettings:
+    enabled: bool = True
     effort: str = ""
     summary: str = ""
 
 
 @dataclass(frozen=True)
 class GoogleThinkingSettings:
+    enabled: bool = True
     include_thoughts: bool = True
     level: str = ""
     budget: int | None = None
@@ -217,7 +219,7 @@ def build_google_generate_content_config(
     *,
     thinking_settings: GoogleThinkingSettings | None,
 ) -> Any | None:
-    if thinking_settings is None or not thinking_settings.include_thoughts:
+    if thinking_settings is None or not thinking_settings.enabled:
         return None
 
     try:
@@ -227,7 +229,7 @@ def build_google_generate_content_config(
             "当前环境缺少 `google-genai` 依赖，请先执行 `pip install -r requirements.txt`。"
         ) from exc
 
-    thinking_kwargs: dict[str, Any] = {"include_thoughts": True}
+    thinking_kwargs: dict[str, Any] = {"include_thoughts": thinking_settings.include_thoughts}
     if thinking_settings.budget is not None:
         thinking_kwargs["thinking_budget"] = thinking_settings.budget
     elif thinking_settings.level:

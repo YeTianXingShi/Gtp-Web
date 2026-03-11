@@ -56,7 +56,7 @@ def _build_openai_reasoning_config(
     *,
     reasoning_settings: Any,
 ) -> dict[str, Any] | None:
-    if reasoning_settings is None:
+    if reasoning_settings is None or not getattr(reasoning_settings, "enabled", True):
         return None
 
     config: dict[str, Any] = {}

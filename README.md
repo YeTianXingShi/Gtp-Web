@@ -61,10 +61,11 @@ cp config/users.example.json config/users.json
   - 使用 JSON 结构统一维护 OpenAI / Google 的文本模型与图片模型
   - 标准 JSON 可直接使用，另外支持 `//` 与 `/* */` 注释
   - `openai.defaults.reasoning`: 给 OpenAI 模型设置默认 reasoning 参数
-  - `openai.models[].reasoning`: 为单个 OpenAI 模型覆盖 reasoning；可配 `effort`、`summary`
+  - `openai.models[].reasoning`: 为单个 OpenAI 模型独立配置 reasoning；可配 `enabled`、`effort`、`summary`
   - `google.defaults.thinking`: 给 Gemini 模型设置默认 thinking 参数
-  - `google.models[].thinking`: 为单个 Gemini 模型覆盖 thinking；可配 `include_thoughts`、`level`、`budget`
-  - 将某个模型的 `reasoning` / `thinking` 写成 `false` 或 `null`，可显式关闭该能力
+  - `google.models[].thinking`: 为单个 Gemini 模型独立配置 thinking；可配 `enabled`、`include_thoughts`、`level`、`budget`
+  - `enabled` 控制是否启用思考；`include_thoughts` 仅控制是否把 thoughts / reasoning 摘要回传给前端
+  - 将某个模型的 `reasoning` / `thinking` 写成 `false` 或 `null`，仍可显式关闭该能力
 - `config/env/storage.env`
   - `CHAT_DB_FILE`: 聊天记录数据库文件路径（默认 `./data/chat.db`）
   - `UPLOAD_DIR`: 附件存储目录（默认 `./data/uploads`）
@@ -90,11 +91,14 @@ cp config/users.example.json config/users.json
 - 后台管理页现在支持直接编辑 `models.jsonc`，保存后会即时热更新模型配置。
 - 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
 - OpenAI reasoning 配置建议：
+  - 推荐直接在 `openai.models[]` 中给每个模型写完整配置，这样每个模型都能独立控制是否启用 reasoning 及其强度。
   - `summary=auto` 表示让上游自动选择可用摘要级别；如果想更短可试 `concise`，想更完整可试 `detailed`。
-  - 仅 reasoning 模型需要配置 `reasoning`；普通模型可以不写该字段。
+  - 仅 reasoning 模型需要开启 `reasoning.enabled=true`；普通模型可不写该字段，或显式设为 `enabled=false`。
 - Gemini thinking 配置建议：
+  - 推荐直接在 `google.models[]` 中给每个模型写完整配置，这样每个模型都能独立控制是否启用 thinking、是否回传 thoughts、以及强度参数。
   - `gemini-3*` 通常优先调 `level`；`gemini-2.5*` 更适合直接配 `budget`。
-  - 如果某个 Gemini 模型不想返回 thought summaries，直接将 `thinking` 设为 `false`。
+  - 如果某个 Gemini 模型仍需思考但不想返回 thought summaries，请设置 `thinking.enabled=true` 且 `include_thoughts=false`。
+  - 如果某个 Gemini 模型完全不想启用 thinking，再将 `thinking.enabled` 设为 `false`。
 
 ## 3. 启动
 

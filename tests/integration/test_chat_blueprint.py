@@ -331,6 +331,50 @@ def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
     assert seen_requests[0]["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
+def test_openai_reasoning_enabled_false_falls_back_to_chat_completions(app_builder):
+    app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {\n'
+            '    "image_model": "",\n'
+            '    "defaults": {"reasoning": {"enabled": true, "effort": "high", "summary": "auto"}},\n'
+            '    "models": [{"name": "gpt-5-mini", "reasoning": {"enabled": false}}]\n'
+            '  },\n'
+            '  "google": {"image_model": "", "models": []}\n'
+            '}\n'
+        ),
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "openai:gpt-5-mini"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "openai:gpt-5-mini",
+            "content": "这次不要走 reasoning",
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    _ = resp.get_data(as_text=True)
+
+    seen_requests = app.extensions["seen_openai_requests"]
+    assert seen_requests
+    assert seen_requests[0].get("reasoning") is None
+    assert "messages" in seen_requests[0]
+    assert "input" not in seen_requests[0]
+
+
 def test_google_model_specific_thinking_config_is_applied(app_builder):
     app = app_builder(
         models_config_text=(
@@ -382,6 +426,60 @@ def test_google_model_specific_thinking_config_is_applied(app_builder):
     assert thinking_config is not None
     assert getattr(thinking_config, "include_thoughts", None) is True
     assert getattr(thinking_config, "thinking_budget", None) == 1024
+
+
+def test_google_thinking_can_hide_thoughts_without_disabling_thinking(app_builder):
+    app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": []},\n'
+            '  "google": {\n'
+            '    "image_model": "",\n'
+            '    "models": [{"name": "gemini-2.5-pro", "thinking": {"enabled": true, "include_thoughts": false, "level": "high"}}]\n'
+            '  }\n'
+            '}\n'
+        ),
+        openai_env_text=(
+            "OPENAI_BASE_URL=\n"
+            "OPENAI_API_KEY=\n"
+        ),
+        google_env_text=(
+            "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+        ),
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.5-pro"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.5-pro",
+            "content": "请认真思考，但别回传 thoughts",
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    _ = resp.get_data(as_text=True)
+
+    seen_requests = app.extensions["seen_google_requests"]
+    assert seen_requests
+    config = seen_requests[0]["config"]
+    thinking_config = getattr(config, "thinking_config", None)
+    assert thinking_config is not None
+    assert getattr(thinking_config, "include_thoughts", None) is False
+    thinking_level = getattr(thinking_config, "thinking_level", None)
+    assert str(getattr(thinking_level, "value", thinking_level)).lower() == "high"
 
 
 

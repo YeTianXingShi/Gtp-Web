@@ -243,10 +243,15 @@ label span {
   gap: 8px;
 }
 
-.side-actions button {
+.side-actions button,
+.side-actions .side-select {
   height: 42px;
   min-height: 42px;
   padding: 0 10px;
+}
+
+.side-actions .side-select {
+  grid-column: 1 / -1;
 }
 
 .conversation-list {

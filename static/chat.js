@@ -8,6 +8,7 @@ const sendBtn = document.getElementById("send-btn");
 const newConvBtn = document.getElementById("new-conv-btn");
 const renameConvBtn = document.getElementById("rename-conv-btn");
 const exportConvBtn = document.getElementById("export-conv-btn");
+const exportFormatSelectEl = document.getElementById("export-format-select");
 const deleteConvBtn = document.getElementById("delete-conv-btn");
 const searchInputEl = document.getElementById("search-input");
 const conversationListEl = document.getElementById("conversation-list");
@@ -590,6 +591,9 @@ function updateActionButtons() {
   newConvBtn.disabled = busy;
   renameConvBtn.disabled = busy || !hasConversation || state.editingConversationId !== null;
   exportConvBtn.disabled = busy || !hasConversation;
+  if (exportFormatSelectEl) {
+    exportFormatSelectEl.disabled = busy || !hasConversation;
+  }
   deleteConvBtn.disabled = busy || !hasConversation;
   modelSelectEl.disabled = busy;
   fileInputEl.disabled = busy;
@@ -1079,14 +1083,31 @@ async function streamReply({ conversationId, model, content, files, assistantEl 
 
 function getFilenameFromDisposition(headerValue) {
   if (!headerValue) return "";
-  const match = /filename="?([^"]+)"?/i.exec(headerValue);
-  return match ? match[1] : "";
+
+  const encodedMatch = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(headerValue);
+  if (encodedMatch?.[1]) {
+    try {
+      return decodeURIComponent(encodedMatch[1]);
+    } catch {
+      // Fallback to plain filename.
+    }
+  }
+
+  const plainMatch = /filename\s*=\s*"?([^";]+)"?/i.exec(headerValue);
+  return plainMatch ? plainMatch[1] : "";
+}
+
+function getExportFileExtension(format) {
+  if (format === "txt") return "txt";
+  if (format === "md") return "md";
+  return "json";
 }
 
 async function exportCurrentConversation() {
   if (!Number.isInteger(state.currentConversationId)) return;
+  const format = exportFormatSelectEl?.value || "json";
   const resp = await fetch(
-    `/api/conversations/${state.currentConversationId}/export?format=json`
+    `/api/conversations/${state.currentConversationId}/export?format=${encodeURIComponent(format)}`
   );
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}));
@@ -1095,7 +1116,7 @@ async function exportCurrentConversation() {
   const blob = await resp.blob();
   const filename =
     getFilenameFromDisposition(resp.headers.get("Content-Disposition")) ||
-    "conversation.json";
+    `conversation.${getExportFileExtension(format)}`;
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

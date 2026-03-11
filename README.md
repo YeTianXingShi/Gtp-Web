@@ -55,6 +55,9 @@ cp config/users.example.json config/users.json
   - `OPENAI_BASE_URL`: OpenAI 或兼容网关 API 根地址，例如 `https://api.openai.com/v1`
   - `OPENAI_API_KEY`: OpenAI 或兼容服务密钥
   - `OPENAI_MODELS`: OpenAI 来源模型列表，逗号分隔
+  - `OPENAI_REASONING_EFFORT`: 推理强度，常用 `low/medium/high`；越高通常越慢、token 越多，但推理更充分
+  - `OPENAI_REASONING_SUMMARY`: 推理摘要级别，支持 `auto/concise/detailed`
+  - `OPENAI_REASONING_MODEL_PATTERNS`: 哪些 OpenAI 模型启用推理摘要，逗号分隔，支持 `*` 通配
 - `config/env/google.env`
   - `GOOGLE_BASE_URL`: Gemini API 根地址；留空时使用官方默认地址
   - `GOOGLE_API_KEY`: Gemini API Key
@@ -86,6 +89,10 @@ cp config/users.example.json config/users.json
 - 已不再读取旧版 `config/env/ai.env` 与 `AI_*` 变量；请统一迁移到 `openai.env` 与 `google.env`。
 - 后台管理页现在会将 OpenAI 与 Google Gemini 分成两个独立配置分组展示。
 - 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
+- OpenAI reasoning 配置建议：
+  - `OPENAI_REASONING_SUMMARY=auto` 表示“为当前模型选择可用的最详细摘要器”；按 OpenAI 官方说明，今天对大多数 reasoning 模型来说，它通常等价于 `detailed`，但未来可能出现更细的档位。
+  - 如果你只想要较短的界面摘要，可以改成 `concise`；如果想稳定拿到较完整摘要，可用 `detailed`（前提是该模型支持）。
+  - `OPENAI_REASONING_MODEL_PATTERNS` 默认是 `gpt-5*,o1*,o3*,o4*,computer-use-preview*`，只有命中的模型才会开启推理摘要。
 - Gemini thinking 配置建议：
   - 当前如果主要使用 `gemini-3*`，建议保持 `GOOGLE_THINKING_BUDGET=` 为空，重点调 `GOOGLE_THINKING_LEVEL`。
   - 如果使用 `gemini-2.5*`，推荐先从 `GOOGLE_THINKING_BUDGET=-1` 开始；想压延迟或成本时可尝试 `1024`，复杂推理可提高到 `4096` 或更高。

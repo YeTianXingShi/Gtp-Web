@@ -2,6 +2,9 @@ const messagesEl = document.getElementById("messages");
 const chatForm = document.getElementById("chat-form");
 const promptEl = document.getElementById("prompt");
 const modelSelectEl = document.getElementById("model-select");
+const modelSettingFieldEl = document.getElementById("model-setting-field");
+const modelSettingLabelEl = document.getElementById("model-setting-label");
+const modelSettingSelectEl = document.getElementById("model-setting-select");
 const logoutBtn = document.getElementById("logout-btn");
 const adminBtn = document.getElementById("admin-btn");
 const sendBtn = document.getElementById("send-btn");
@@ -25,6 +28,7 @@ const state = {
   sending: false,
   renaming: false,
   deleting: false,
+  syncingConversationSettings: false,
   searchKeyword: "",
   editingConversationId: null,
   editingTitleDraft: "",
@@ -38,6 +42,12 @@ const MAX_FILES_PER_MESSAGE =
   Number.parseInt(window.__APP_CONFIG__?.maxAttachmentsPerMessage, 10) || 5;
 const MAX_UPLOAD_MB = Number.parseInt(window.__APP_CONFIG__?.maxUploadMB, 10) || 15;
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const MODEL_OPTIONS = Array.isArray(window.__APP_CONFIG__?.modelOptions)
+  ? window.__APP_CONFIG__.modelOptions
+  : [];
+const MODEL_OPTION_MAP = new Map(
+  MODEL_OPTIONS.map((item) => [String(item?.id || ""), item])
+);
 const ALLOWED_ATTACHMENT_EXTS = Array.isArray(
   window.__APP_CONFIG__?.allowedAttachmentExts
 )
@@ -583,6 +593,184 @@ function buildLocalMessageAttachments(pendingFiles) {
   });
 }
 
+function getCurrentConversation() {
+  return (
+    state.conversations.find((item) => item.id === state.currentConversationId) || null
+  );
+}
+
+function getModelConfig(modelId) {
+  return MODEL_OPTION_MAP.get(String(modelId || "")) || null;
+}
+
+function getModelSettingDescriptor(modelId) {
+  const modelOption = getModelConfig(modelId);
+  if (!modelOption) return null;
+
+  const reasoning = modelOption.reasoning;
+  if (
+    modelOption.provider === "openai" &&
+    reasoning?.enabled &&
+    Array.isArray(reasoning.effort_options) &&
+    reasoning.effort_options.length
+  ) {
+    const options = reasoning.effort_options
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean);
+    if (!options.length) return null;
+    return {
+      key: "reasoning_effort",
+      label: "Effort：",
+      options,
+      defaultValue: String(reasoning.effort || options[0] || "")
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  const thinking = modelOption.thinking;
+  if (
+    modelOption.provider === "google" &&
+    thinking?.enabled &&
+    Array.isArray(thinking.level_options) &&
+    thinking.level_options.length
+  ) {
+    const options = thinking.level_options
+      .map((item) => String(item || "").trim().toLowerCase())
+      .filter(Boolean);
+    if (!options.length) return null;
+    return {
+      key: "thinking_level",
+      label: "Level：",
+      options,
+      defaultValue: String(thinking.level || options[0] || "")
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  return null;
+}
+
+function normalizeModelSettingValue(descriptor, rawValue) {
+  if (!descriptor) return "";
+  const normalized = String(rawValue || "").trim().toLowerCase();
+  if (descriptor.options.includes(normalized)) {
+    return normalized;
+  }
+  if (descriptor.options.includes(descriptor.defaultValue)) {
+    return descriptor.defaultValue;
+  }
+  return descriptor.options[0] || "";
+}
+
+function syncModelSettingControl(options = {}) {
+  const {
+    modelId = modelSelectEl.value,
+    reasoningEffort = "",
+    thinkingLevel = "",
+    preserveCurrentValue = false,
+  } = options;
+
+  if (!modelSettingFieldEl || !modelSettingLabelEl || !modelSettingSelectEl) {
+    return { reasoning_effort: "", thinking_level: "" };
+  }
+
+  const descriptor = getModelSettingDescriptor(modelId);
+  if (!descriptor) {
+    modelSettingFieldEl.hidden = true;
+    modelSettingSelectEl.innerHTML = "";
+    modelSettingSelectEl.disabled = true;
+    return { reasoning_effort: "", thinking_level: "" };
+  }
+
+  const preferredValue = preserveCurrentValue
+    ? modelSettingSelectEl.value
+    : descriptor.key === "reasoning_effort"
+      ? reasoningEffort
+      : thinkingLevel;
+  const normalizedValue = normalizeModelSettingValue(descriptor, preferredValue);
+
+  modelSettingLabelEl.textContent = descriptor.label;
+  modelSettingSelectEl.innerHTML = "";
+  for (const optionValue of descriptor.options) {
+    const optionEl = document.createElement("option");
+    optionEl.value = optionValue;
+    optionEl.textContent = optionValue;
+    modelSettingSelectEl.appendChild(optionEl);
+  }
+  modelSettingFieldEl.hidden = false;
+  modelSettingSelectEl.disabled = false;
+  modelSettingSelectEl.value = normalizedValue;
+
+  if (descriptor.key === "reasoning_effort") {
+    return { reasoning_effort: normalizedValue, thinking_level: "" };
+  }
+  return { reasoning_effort: "", thinking_level: normalizedValue };
+}
+
+function getSelectedModelSettings() {
+  const descriptor = getModelSettingDescriptor(modelSelectEl.value);
+  if (!descriptor || !modelSettingSelectEl || modelSettingFieldEl?.hidden) {
+    return { reasoning_effort: "", thinking_level: "" };
+  }
+
+  const normalizedValue = normalizeModelSettingValue(
+    descriptor,
+    modelSettingSelectEl.value
+  );
+  modelSettingSelectEl.value = normalizedValue;
+  if (descriptor.key === "reasoning_effort") {
+    return { reasoning_effort: normalizedValue, thinking_level: "" };
+  }
+  return { reasoning_effort: "", thinking_level: normalizedValue };
+}
+
+function applyConversationSelection(conversation) {
+  if (!conversation) {
+    syncModelSettingControl({
+      modelId: modelSelectEl.value,
+      preserveCurrentValue: true,
+    });
+    return;
+  }
+
+  modelSelectEl.value = conversation.model;
+  syncModelSettingControl({
+    modelId: conversation.model,
+    reasoningEffort: conversation.reasoning_effort || "",
+    thinkingLevel: conversation.thinking_level || "",
+  });
+}
+
+function getConversationSelectionSnapshot(conversation = null) {
+  const source = conversation || getCurrentConversation();
+  if (source) {
+    return {
+      model: source.model,
+      reasoning_effort: source.reasoning_effort || "",
+      thinking_level: source.thinking_level || "",
+    };
+  }
+
+  const selectedSettings = getSelectedModelSettings();
+  return {
+    model: modelSelectEl.value,
+    reasoning_effort: selectedSettings.reasoning_effort,
+    thinking_level: selectedSettings.thinking_level,
+  };
+}
+
+function restoreConversationSelection(snapshot) {
+  if (!snapshot) return;
+  modelSelectEl.value = snapshot.model;
+  syncModelSettingControl({
+    modelId: snapshot.model,
+    reasoningEffort: snapshot.reasoning_effort,
+    thinkingLevel: snapshot.thinking_level,
+  });
+}
+
 function showNoConversationHint() {
   clearMessages();
   if (state.searchKeyword) {
@@ -593,7 +781,11 @@ function showNoConversationHint() {
 }
 
 function updateActionButtons() {
-  const busy = state.sending || state.renaming || state.deleting;
+  const busy =
+    state.sending ||
+    state.renaming ||
+    state.deleting ||
+    state.syncingConversationSettings;
   const hasConversation = Number.isInteger(state.currentConversationId);
   sendBtn.disabled = busy;
   newConvBtn.disabled = busy;
@@ -610,6 +802,9 @@ function updateActionButtons() {
     cancelDeleteBtn.disabled = busy;
   }
   modelSelectEl.disabled = busy;
+  if (modelSettingSelectEl) {
+    modelSettingSelectEl.disabled = busy || Boolean(modelSettingFieldEl?.hidden);
+  }
   fileInputEl.disabled = busy;
 
   if (busy || !hasConversation) {
@@ -794,9 +989,32 @@ async function loadConversations() {
     (item) => item.id === state.currentConversationId
   );
   if (current) {
-    modelSelectEl.value = current.model;
+    applyConversationSelection(current);
+  } else {
+    syncModelSettingControl({
+      modelId: modelSelectEl.value,
+      preserveCurrentValue: true,
+    });
   }
   renderConversations();
+}
+
+async function syncCurrentConversationSettings(payload) {
+  if (!Number.isInteger(state.currentConversationId)) return;
+
+  state.syncingConversationSettings = true;
+  updateActionButtons();
+  try {
+    await fetchJson(`/api/conversations/${state.currentConversationId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    await loadConversations();
+  } finally {
+    state.syncingConversationSettings = false;
+    updateActionButtons();
+  }
 }
 
 async function createConversation() {
@@ -807,10 +1025,15 @@ async function createConversation() {
     searchInputEl.value = "";
   }
   const model = modelSelectEl.value;
+  const modelSettings = getSelectedModelSettings();
   const data = await fetchJson("/api/conversations", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model }),
+    body: JSON.stringify({
+      model,
+      reasoning_effort: modelSettings.reasoning_effort,
+      thinking_level: modelSettings.thinking_level,
+    }),
   });
   state.currentConversationId = data.conversation.id;
   await loadConversations();
@@ -834,7 +1057,17 @@ async function loadMessages(conversationId) {
       });
     }
   }
-  modelSelectEl.value = data.model;
+  const current = getCurrentConversation();
+  if (current) {
+    current.model = data.model;
+    current.reasoning_effort = data.reasoning_effort || "";
+    current.thinking_level = data.thinking_level || "";
+  }
+  applyConversationSelection({
+    model: data.model,
+    reasoning_effort: data.reasoning_effort || "",
+    thinking_level: data.thinking_level || "",
+  });
 }
 
 async function selectConversation(conversationId) {
@@ -904,10 +1137,20 @@ function getErrorMessage(err) {
   return String(err);
 }
 
-async function streamReply({ conversationId, model, content, files, assistantEl }) {
+async function streamReply({
+  conversationId,
+  model,
+  reasoningEffort,
+  thinkingLevel,
+  content,
+  files,
+  assistantEl,
+}) {
   const formData = new FormData();
   formData.append("conversation_id", String(conversationId));
   formData.append("model", model);
+  formData.append("reasoning_effort", reasoningEffort || "");
+  formData.append("thinking_level", thinkingLevel || "");
   formData.append("content", content);
   for (const file of files) {
     formData.append("files", file);
@@ -1276,6 +1519,7 @@ chatForm.addEventListener("submit", async (event) => {
   }
 
   const model = modelSelectEl.value;
+  const modelSettings = getSelectedModelSettings();
   const conversationId = state.currentConversationId;
   const localAttachments = buildLocalMessageAttachments(pendingFiles);
   addMessage("user", content, { attachments: localAttachments });
@@ -1288,7 +1532,15 @@ chatForm.addEventListener("submit", async (event) => {
 
   let streamSucceeded = false;
   try {
-    await streamReply({ conversationId, model, content, files, assistantEl });
+    await streamReply({
+      conversationId,
+      model,
+      reasoningEffort: modelSettings.reasoning_effort,
+      thinkingLevel: modelSettings.thinking_level,
+      content,
+      files,
+      assistantEl,
+    });
     streamSucceeded = true;
   } catch (err) {
     if (!err || err.keepPartial !== true) {
@@ -1309,6 +1561,48 @@ chatForm.addEventListener("submit", async (event) => {
     await loadConversations();
   } catch (err) {
     addMessage("system", `刷新会话列表失败：${getErrorMessage(err)}`);
+  }
+});
+
+modelSelectEl.addEventListener("change", async () => {
+  const previousSelection = getConversationSelectionSnapshot();
+  const nextSettings = syncModelSettingControl({ modelId: modelSelectEl.value });
+  updateActionButtons();
+
+  if (!Number.isInteger(state.currentConversationId) || state.sending) {
+    return;
+  }
+
+  try {
+    await syncCurrentConversationSettings({
+      model: modelSelectEl.value,
+      reasoning_effort: nextSettings.reasoning_effort,
+      thinking_level: nextSettings.thinking_level,
+    });
+  } catch (err) {
+    restoreConversationSelection(previousSelection);
+    addMessage("system", `切换模型失败：${getErrorMessage(err)}`);
+  }
+});
+
+modelSettingSelectEl?.addEventListener("change", async () => {
+  const previousSelection = getConversationSelectionSnapshot();
+  const nextSettings = getSelectedModelSettings();
+  updateActionButtons();
+
+  if (!Number.isInteger(state.currentConversationId) || state.sending) {
+    return;
+  }
+
+  try {
+    await syncCurrentConversationSettings({
+      model: modelSelectEl.value,
+      reasoning_effort: nextSettings.reasoning_effort,
+      thinking_level: nextSettings.thinking_level,
+    });
+  } catch (err) {
+    restoreConversationSelection(previousSelection);
+    addMessage("system", `切换思考参数失败：${getErrorMessage(err)}`);
   }
 });
 
@@ -1477,6 +1771,7 @@ window.addEventListener("beforeunload", () => {
   if (ALLOWED_ATTACHMENT_EXTS.length) {
     fileInputEl.setAttribute("accept", ALLOWED_ATTACHMENT_EXTS.join(","));
   }
+  syncModelSettingControl({ modelId: modelSelectEl.value });
   updateActionButtons();
   renderSelectedFiles();
   try {

@@ -201,6 +201,25 @@ def _parse_optional_text(raw_value: Any, *, context: str, lowercase: bool = Fals
     return text.lower() if lowercase else text
 
 
+def _parse_text_options(raw_value: Any, *, context: str) -> tuple[str, ...]:
+    if raw_value is None:
+        return ()
+    if not isinstance(raw_value, list):
+        raise ValueError(f"{context} 必须是字符串数组")
+
+    seen: set[str] = set()
+    options: list[str] = []
+    for index, item in enumerate(raw_value, start=1):
+        value = _parse_optional_text(item, context=f"{context}[{index}]", lowercase=True)
+        if not value:
+            raise ValueError(f"{context}[{index}] 不能为空")
+        if value in seen:
+            continue
+        seen.add(value)
+        options.append(value)
+    return tuple(options)
+
+
 
 def _parse_reasoning_settings(
     raw_value: Any,
@@ -210,12 +229,14 @@ def _parse_reasoning_settings(
 ) -> OpenAIReasoningSettings:
     default_effort = "" if base_settings is None else base_settings.effort
     default_summary = "" if base_settings is None else base_settings.summary
+    default_effort_options = () if base_settings is None else base_settings.effort_options
 
     if raw_value is None or raw_value is False:
         return OpenAIReasoningSettings(
             enabled=False,
             effort=default_effort,
             summary=default_summary,
+            effort_options=default_effort_options,
         )
     if raw_value is True:
         raw_value = {}
@@ -226,14 +247,24 @@ def _parse_reasoning_settings(
     if "effort" in raw_value:
         effort = _parse_optional_text(raw_value.get("effort"), context=f"{context}.effort", lowercase=True)
 
+    effort_options = default_effort_options
+    if "effort_options" in raw_value:
+        effort_options = _parse_text_options(raw_value.get("effort_options"), context=f"{context}.effort_options")
+
     summary = default_summary
     if "summary" in raw_value:
         summary = _parse_optional_text(raw_value.get("summary"), context=f"{context}.summary", lowercase=True)
+
+    if not effort and effort_options:
+        effort = effort_options[0]
+    if effort and effort_options and effort not in effort_options:
+        raise ValueError(f"{context}.effort 必须在 effort_options 中")
 
     return OpenAIReasoningSettings(
         enabled=_parse_json_bool(raw_value.get("enabled"), context=f"{context}.enabled", default=True),
         effort=effort,
         summary=summary,
+        effort_options=effort_options,
     )
 
 
@@ -247,6 +278,7 @@ def _parse_thinking_settings(
     default_include_thoughts = True if base_settings is None else base_settings.include_thoughts
     default_level = "" if base_settings is None else base_settings.level
     default_budget = None if base_settings is None else base_settings.budget
+    default_level_options = () if base_settings is None else base_settings.level_options
 
     if raw_value is None or raw_value is False:
         return GoogleThinkingSettings(
@@ -254,6 +286,7 @@ def _parse_thinking_settings(
             include_thoughts=default_include_thoughts,
             level=default_level,
             budget=default_budget,
+            level_options=default_level_options,
         )
     if raw_value is True:
         raw_value = {}
@@ -264,9 +297,18 @@ def _parse_thinking_settings(
     if "level" in raw_value:
         level = _parse_optional_text(raw_value.get("level"), context=f"{context}.level", lowercase=True)
 
+    level_options = default_level_options
+    if "level_options" in raw_value:
+        level_options = _parse_text_options(raw_value.get("level_options"), context=f"{context}.level_options")
+
     budget = default_budget
     if "budget" in raw_value:
         budget = safe_int(raw_value.get("budget"))
+
+    if not level and level_options:
+        level = level_options[0]
+    if level and level_options and level not in level_options:
+        raise ValueError(f"{context}.level 必须在 level_options 中")
 
     return GoogleThinkingSettings(
         enabled=_parse_json_bool(raw_value.get("enabled"), context=f"{context}.enabled", default=True),
@@ -277,6 +319,7 @@ def _parse_thinking_settings(
         ),
         level=level,
         budget=budget,
+        level_options=level_options,
     )
 
 

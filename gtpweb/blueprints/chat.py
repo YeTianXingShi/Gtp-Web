@@ -13,10 +13,14 @@ from werkzeug.datastructures import FileStorage
 from gtpweb.ai_providers import (
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
+    build_effective_google_thinking_settings,
+    build_effective_openai_reasoning_settings,
     build_google_generate_content_config,
     build_google_contents,
     extract_google_reasoning_delta,
     extract_google_text_delta,
+    normalize_model_selection,
+    resolve_conversation_model_settings,
     resolve_model_option,
 )
 from gtpweb.assistant_actions import execute_assistant_action, parse_assistant_action
@@ -165,11 +169,15 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         uploaded_files: list[FileStorage] = []
         content = ""
         model = ""
+        reasoning_effort = ""
+        thinking_level = ""
         conversation_id: int | None = None
 
         if content_type.startswith("multipart/form-data"):
             content = str(request.form.get("content", "")).strip()
             model = str(request.form.get("model", "")).strip()
+            reasoning_effort = str(request.form.get("reasoning_effort", "")).strip().lower()
+            thinking_level = str(request.form.get("thinking_level", "")).strip().lower()
             conversation_id = safe_int(request.form.get("conversation_id"))
             uploaded_files = [
                 file
@@ -180,15 +188,19 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             payload = request.get_json(silent=True) or {}
             content = str(payload.get("content", "")).strip()
             model = str(payload.get("model", "")).strip()
+            reasoning_effort = str(payload.get("reasoning_effort", "")).strip().lower()
+            thinking_level = str(payload.get("thinking_level", "")).strip().lower()
             conversation_id = payload.get("conversation_id")
             if not isinstance(conversation_id, int):
                 conversation_id = safe_int(conversation_id)
 
         logger.info(
-            "聊天流请求: 用户=%s 会话ID=%s 模型=%s 文本长度=%s 附件数量=%s 请求类型=%s",
+            "聊天流请求: 用户=%s 会话ID=%s 模型=%s effort=%s level=%s 文本长度=%s 附件数量=%s 请求类型=%s",
             username,
             conversation_id,
             model,
+            reasoning_effort,
+            thinking_level,
             len(content),
             len(uploaded_files),
             content_type,
@@ -196,13 +208,6 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
 
         if not content and not uploaded_files:
             return jsonify({"ok": False, "error": "消息内容和附件不能同时为空"}), 400
-
-        model_option = resolve_model_option(model, runtime_settings.model_options)
-        if model_option is None:
-            return jsonify({"ok": False, "error": "无效的模型"}), 400
-        selected_model_id = model_option.id
-        selected_provider = model_option.provider
-        upstream_model = model_option.model_name
 
         if not isinstance(conversation_id, int):
             return jsonify({"ok": False, "error": "conversation_id 无效"}), 400
@@ -216,6 +221,12 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 ),
                 400,
             )
+
+        selected_model_id = ""
+        selected_provider = ""
+        upstream_model = ""
+        effective_openai_reasoning = None
+        effective_google_thinking = None
 
         prepared_attachments: list[dict[str, Any]] = []
         for file in uploaded_files:
@@ -312,7 +323,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         with open_db_connection(db_file) as conn:
             conv = conn.execute(
                 """
-                SELECT id, title
+                SELECT id, title, model, reasoning_effort, thinking_level
                 FROM conversations
                 WHERE id = ? AND username = ?
                 """,
@@ -320,6 +331,43 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             ).fetchone()
             if conv is None:
                 return jsonify({"ok": False, "error": "会话不存在"}), 404
+
+            current_model = normalize_model_selection(
+                str(conv["model"]),
+                runtime_settings.model_options,
+                fallback_to_first=True,
+            )
+            requested_model = model or current_model
+            model_option = resolve_model_option(requested_model, runtime_settings.model_options)
+            if model_option is None:
+                return jsonify({"ok": False, "error": "无效的模型"}), 400
+
+            raw_reasoning_effort = reasoning_effort
+            raw_thinking_level = thinking_level
+            if not raw_reasoning_effort and not raw_thinking_level and model_option.id == current_model:
+                raw_reasoning_effort = str(conv["reasoning_effort"] or "").strip().lower()
+                raw_thinking_level = str(conv["thinking_level"] or "").strip().lower()
+            try:
+                conversation_settings = resolve_conversation_model_settings(
+                    model_option,
+                    reasoning_effort=raw_reasoning_effort,
+                    thinking_level=raw_thinking_level,
+                    strict=bool(raw_reasoning_effort or raw_thinking_level),
+                )
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+
+            selected_model_id = model_option.id
+            selected_provider = model_option.provider
+            upstream_model = model_option.model_name
+            effective_openai_reasoning = build_effective_openai_reasoning_settings(
+                model_option,
+                conversation_settings,
+            )
+            effective_google_thinking = build_effective_google_thinking_settings(
+                model_option,
+                conversation_settings,
+            )
 
             count_row = conn.execute(
                 "SELECT COUNT(1) AS total FROM messages WHERE conversation_id = ?",
@@ -404,10 +452,16 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             conn.execute(
                 """
                 UPDATE conversations
-                SET title = ?, model = ?, updated_at = CURRENT_TIMESTAMP
+                SET title = ?, model = ?, reasoning_effort = ?, thinking_level = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (updated_title, selected_model_id, conversation_id),
+                (
+                    updated_title,
+                    selected_model_id,
+                    conversation_settings.reasoning_effort,
+                    conversation_settings.thinking_level,
+                    conversation_id,
+                ),
             )
             conn.commit()
             logger.info(
@@ -436,7 +490,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     if openai_client is None:
                         raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
                     reasoning_config = _build_openai_reasoning_config(
-                        reasoning_settings=model_option.openai_reasoning,
+                        reasoning_settings=effective_openai_reasoning,
                     )
                     if reasoning_config is not None:
                         request_kwargs = {
@@ -510,7 +564,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                         "contents": build_google_contents(completion_messages),
                     }
                     google_config = build_google_generate_content_config(
-                        thinking_settings=model_option.google_thinking,
+                        thinking_settings=effective_google_thinking,
                     )
                     if google_config is not None:
                         request_kwargs["config"] = google_config

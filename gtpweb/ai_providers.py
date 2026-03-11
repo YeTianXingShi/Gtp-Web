@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from gtpweb.openai_stream import get_obj_value, to_dict
@@ -21,6 +21,7 @@ class OpenAIReasoningSettings:
     enabled: bool = True
     effort: str = ""
     summary: str = ""
+    effort_options: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,13 @@ class GoogleThinkingSettings:
     include_thoughts: bool = True
     level: str = ""
     budget: int | None = None
+    level_options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ConversationModelSettings:
+    reasoning_effort: str = ""
+    thinking_level: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,6 +158,152 @@ def normalize_model_selection(
     if fallback_to_first and options_tuple:
         return options_tuple[0].id
     return str(model_value or "").strip()
+
+
+def _normalize_choice_value(raw_value: Any) -> str:
+    return str(raw_value or "").strip().lower()
+
+
+def _resolve_selectable_value(
+    *,
+    requested_value: Any,
+    default_value: str,
+    selectable_values: tuple[str, ...],
+    unsupported_message: str,
+    invalid_message: str,
+    strict: bool,
+) -> str:
+    normalized_default = _normalize_choice_value(default_value)
+    if not normalized_default and selectable_values:
+        normalized_default = selectable_values[0]
+
+    normalized_requested = _normalize_choice_value(requested_value)
+    if not normalized_requested:
+        return normalized_default
+
+    if selectable_values:
+        if normalized_requested in selectable_values:
+            return normalized_requested
+        if strict:
+            raise ValueError(invalid_message)
+        return normalized_default
+
+    if not normalized_default:
+        if strict:
+            raise ValueError(unsupported_message)
+        return ""
+
+    if normalized_requested == normalized_default:
+        return normalized_requested
+    if strict:
+        raise ValueError(invalid_message)
+    return normalized_default
+
+
+def resolve_conversation_model_settings(
+    model_option: ModelOption | None,
+    *,
+    reasoning_effort: Any = "",
+    thinking_level: Any = "",
+    strict: bool = False,
+) -> ConversationModelSettings:
+    if model_option is None:
+        return ConversationModelSettings()
+
+    if model_option.provider == PROVIDER_OPENAI:
+        reasoning_settings = model_option.openai_reasoning
+        if reasoning_settings is None or not reasoning_settings.enabled:
+            if _normalize_choice_value(reasoning_effort) and strict:
+                raise ValueError("当前模型不支持切换 effort")
+            return ConversationModelSettings()
+        return ConversationModelSettings(
+            reasoning_effort=_resolve_selectable_value(
+                requested_value=reasoning_effort,
+                default_value=reasoning_settings.effort,
+                selectable_values=reasoning_settings.effort_options,
+                unsupported_message="当前模型不支持切换 effort",
+                invalid_message="无效的 effort",
+                strict=strict,
+            ),
+        )
+
+    if model_option.provider == PROVIDER_GOOGLE:
+        thinking_settings = model_option.google_thinking
+        if thinking_settings is None or not thinking_settings.enabled:
+            if _normalize_choice_value(thinking_level) and strict:
+                raise ValueError("当前模型不支持切换 level")
+            return ConversationModelSettings()
+        return ConversationModelSettings(
+            thinking_level=_resolve_selectable_value(
+                requested_value=thinking_level,
+                default_value=thinking_settings.level,
+                selectable_values=thinking_settings.level_options,
+                unsupported_message="当前模型不支持切换 level",
+                invalid_message="无效的 level",
+                strict=strict,
+            ),
+        )
+
+    return ConversationModelSettings()
+
+
+def build_effective_openai_reasoning_settings(
+    model_option: ModelOption,
+    conversation_settings: ConversationModelSettings,
+) -> OpenAIReasoningSettings | None:
+    reasoning_settings = model_option.openai_reasoning
+    if reasoning_settings is None:
+        return None
+    if conversation_settings.reasoning_effort:
+        return replace(reasoning_settings, effort=conversation_settings.reasoning_effort)
+    return reasoning_settings
+
+
+def build_effective_google_thinking_settings(
+    model_option: ModelOption,
+    conversation_settings: ConversationModelSettings,
+) -> GoogleThinkingSettings | None:
+    thinking_settings = model_option.google_thinking
+    if thinking_settings is None:
+        return None
+    if conversation_settings.thinking_level:
+        budget = None if thinking_settings.level_options else thinking_settings.budget
+        return replace(
+            thinking_settings,
+            level=conversation_settings.thinking_level,
+            budget=budget,
+        )
+    return thinking_settings
+
+
+def serialize_model_option(model_option: ModelOption) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": model_option.id,
+        "provider": model_option.provider,
+        "model_name": model_option.model_name,
+        "label": model_option.label,
+        "group_label": model_option.group_label,
+    }
+    if model_option.openai_reasoning is not None:
+        item["reasoning"] = {
+            "enabled": model_option.openai_reasoning.enabled,
+            "effort": model_option.openai_reasoning.effort,
+            "summary": model_option.openai_reasoning.summary,
+            "effort_options": list(model_option.openai_reasoning.effort_options),
+        }
+    if model_option.google_thinking is not None:
+        item["thinking"] = {
+            "enabled": model_option.google_thinking.enabled,
+            "include_thoughts": model_option.google_thinking.include_thoughts,
+            "level": model_option.google_thinking.level,
+            "budget": model_option.google_thinking.budget,
+            "level_options": list(model_option.google_thinking.level_options),
+        }
+    return item
+
+
+def serialize_model_options(model_options: Iterable[ModelOption]) -> list[dict[str, Any]]:
+    return [serialize_model_option(option) for option in model_options]
 
 
 def _build_google_part_from_item(item: dict[str, Any]) -> dict[str, Any] | None:

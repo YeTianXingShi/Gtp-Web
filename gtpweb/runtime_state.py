@@ -230,6 +230,7 @@ def _snapshot_model_config_keys(model_options: Iterable[ModelOption], provider: 
                     "enabled": option.openai_reasoning.enabled,
                     "effort": option.openai_reasoning.effort,
                     "summary": option.openai_reasoning.summary,
+                    "effort_options": option.openai_reasoning.effort_options,
                 }
             )
         elif provider == "google":
@@ -241,6 +242,7 @@ def _snapshot_model_config_keys(model_options: Iterable[ModelOption], provider: 
                     "include_thoughts": option.google_thinking.include_thoughts,
                     "level": option.google_thinking.level,
                     "budget": option.google_thinking.budget,
+                    "level_options": option.google_thinking.level_options,
                 }
             )
         snapshots.append(item)

@@ -4,27 +4,29 @@
   // 说明：
   // 1. 每个模型都可以独立配置自己的 reasoning / thinking。
   // 2. `enabled` 用来控制该模型是否启用思考能力。
-  // 3. OpenAI 支持：`enabled`、`effort`、`summary`
-  // 4. Google 支持：`enabled`、`include_thoughts`、`level`、`budget`
+  // 3. OpenAI 支持：`enabled`、`effort`、`effort_options`、`summary`
+  // 4. Google 支持：`enabled`、`include_thoughts`、`level`、`level_options`、`budget`
   // 5. 兼容旧写法：把 `reasoning` / `thinking` 直接写成 false 或 null，依然表示关闭。
   "openai": {
     "image_model": "",
     "models": [
       {
         "name": "gpt-5.2",
-        "label": "GPT-5.2（高强度推理）",
+        "label": "GPT-5.2（标准版）",
         "reasoning": {
           "enabled": true,
           "effort": "high",
+          "effort_options": ["low", "medium", "high"],
           "summary": "auto"
         }
       },
       {
         "name": "gpt-5.4",
-        "label": "GPT-5.4（轻量推理）",
+        "label": "GPT-5.4（增强版）",
         "reasoning": {
           "enabled": true,
           "effort": "medium",
+          "effort_options": ["minimal", "low", "medium"],
           "summary": "concise"
         }
       }
@@ -35,30 +37,33 @@
     "models": [
       {
         "name": "gemini-3-flash-preview",
-        "label": "Gemini 3 Flash（中等思考）",
+        "label": "Gemini 3 Flash 预览版（轻量极速响应）",
         "thinking": {
           "enabled": true,
           "include_thoughts": true,
-          "level": "medium"
+          "level": "medium",
+          "level_options": ["low", "medium", "high"]
         }
       },
       {
         "name": "gemini-3-pro-preview",
-        "label": "Gemini 3 Pro（开启思考但不回传 thoughts）",
+        "label": "Gemini 3 Pro 预览版（强大通用能力）",
         "thinking": {
           "enabled": true,
           "include_thoughts": false,
-          "level": "high"
+          "level": "high",
+          "level_options": ["medium", "high"]
         }
       },
       {
         "name": "gemini-3.1-pro-preview",
-        "label": "Gemini 3.1 Pro（按预算思考）",
+        "label": "Gemini 3.1 Pro 预览版（复杂任务与长文处理）",
         "thinking": {
           "enabled": true,
           "include_thoughts": true,
           "budget": 8192,
-          "level": "high"
+          "level": "high",
+          "level_options": ["medium", "high"]
         }
       }
     ]

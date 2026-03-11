@@ -6,7 +6,7 @@ from typing import Any
 
 from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
 
-from gtpweb.ai_providers import build_model_groups
+from gtpweb.ai_providers import build_model_groups, serialize_model_options
 from gtpweb.config import AppConfig
 from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record, verify_user_credentials
@@ -104,6 +104,7 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
             is_admin=bool(record["is_admin"]),
             models=runtime_settings.models,
             model_groups=build_model_groups(runtime_settings.model_options),
+            model_options=serialize_model_options(runtime_settings.model_options),
             max_attachments_per_message=runtime_settings.max_attachments_per_message,
             max_upload_mb=runtime_settings.max_upload_mb,
             allowed_attachment_exts=sorted(runtime_settings.allowed_attachment_exts),

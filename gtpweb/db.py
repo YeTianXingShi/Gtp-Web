@@ -25,6 +25,8 @@ def init_db(db_file: Path) -> None:
                 username TEXT NOT NULL,
                 title TEXT NOT NULL DEFAULT '新对话',
                 model TEXT NOT NULL,
+                reasoning_effort TEXT NOT NULL DEFAULT '',
+                thinking_level TEXT NOT NULL DEFAULT '',
                 last_response_id TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -63,6 +65,20 @@ def init_db(db_file: Path) -> None:
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
+        conversation_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        if "reasoning_effort" not in conversation_columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("数据库迁移完成: conversations 表已新增 reasoning_effort 字段")
+        if "thinking_level" not in conversation_columns:
+            conn.execute(
+                "ALTER TABLE conversations ADD COLUMN thinking_level TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("数据库迁移完成: conversations 表已新增 thinking_level 字段")
         if "reasoning" not in message_columns:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''"

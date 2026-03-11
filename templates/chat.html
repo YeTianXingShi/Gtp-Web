@@ -20,6 +20,10 @@
           </optgroup>
           {% endfor %}
         </select>
+        <div id="model-setting-field" class="toolbar-setting" hidden>
+          <label id="model-setting-label" for="model-setting-select">Effort：</label>
+          <select id="model-setting-select"></select>
+        </div>
         {% if is_admin %}
         <button id="admin-btn" class="btn-secondary" type="button">后台管理</button>
         {% endif %}
@@ -95,6 +99,7 @@
       window.__APP_CONFIG__ = {
         username: "{{ username }}",
         isAdmin: {{ is_admin | tojson }},
+        modelOptions: {{ model_options | tojson }},
         maxAttachmentsPerMessage: {{ max_attachments_per_message }},
         maxUploadMB: {{ max_upload_mb }},
         allowedAttachmentExts: {{ allowed_attachment_exts | tojson }},

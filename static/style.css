@@ -208,6 +208,20 @@ label span {
   background: rgba(8, 14, 31, 0.95);
 }
 
+.toolbar-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-setting[hidden] {
+  display: none !important;
+}
+
+.toolbar-setting select {
+  min-width: 120px;
+}
+
 .chat-shell {
   width: min(1220px, calc(100% - 18px));
   margin: 0 auto 10px;
@@ -906,6 +920,10 @@ label span {
   .toolbar select {
     min-width: 0;
     width: 100%;
+  }
+
+  .toolbar-setting {
+    grid-column: 2 / 3;
   }
 
   #logout-btn {

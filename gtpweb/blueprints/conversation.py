@@ -10,7 +10,11 @@ from urllib.parse import quote
 
 from flask import Blueprint, Response, jsonify, request, send_file, session
 
-from gtpweb.ai_providers import normalize_model_selection, resolve_model_option
+from gtpweb.ai_providers import (
+    normalize_model_selection,
+    resolve_conversation_model_settings,
+    resolve_model_option,
+)
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
 from gtpweb.runtime_state import get_runtime_state
@@ -30,11 +34,33 @@ def _get_current_user(users_file: Path) -> str | None:
     return str(record["username"])
 
 
-def _serialize_conversation_row(row: Any, normalized_model: str) -> dict[str, Any]:
+def _get_row_choice_value(row: Any, key: str) -> str:
+    if row is None:
+        return ""
+    keys = row.keys() if hasattr(row, "keys") else ()
+    if key not in keys:
+        return ""
+    return str(row[key] or "").strip().lower()
+
+
+def _serialize_conversation_row(
+    row: Any,
+    normalized_model: str,
+    model_options: Any,
+) -> dict[str, Any]:
+    model_option = resolve_model_option(normalized_model, model_options)
+    conversation_settings = resolve_conversation_model_settings(
+        model_option,
+        reasoning_effort=_get_row_choice_value(row, "reasoning_effort"),
+        thinking_level=_get_row_choice_value(row, "thinking_level"),
+        strict=False,
+    )
     return {
         "id": row["id"],
         "title": row["title"],
         "model": normalized_model,
+        "reasoning_effort": conversation_settings.reasoning_effort,
+        "thinking_level": conversation_settings.thinking_level,
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -189,7 +215,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 like_query = f"%{query}%"
                 rows = conn.execute(
                     """
-                    SELECT c.id, c.title, c.model, c.created_at, c.updated_at
+                    SELECT c.id, c.title, c.model, c.reasoning_effort, c.thinking_level, c.created_at, c.updated_at
                     FROM conversations c
                     WHERE c.username = ?
                       AND (
@@ -211,7 +237,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             else:
                 rows = conn.execute(
                     """
-                    SELECT id, title, model, created_at, updated_at
+                    SELECT id, title, model, reasoning_effort, thinking_level, created_at, updated_at
                     FROM conversations
                     WHERE username = ?
                     ORDER BY updated_at DESC, id DESC
@@ -227,6 +253,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     runtime_settings.model_options,
                     fallback_to_first=True,
                 ),
+                runtime_settings.model_options,
             )
             for row in rows
         ]
@@ -260,57 +287,112 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True})
 
     @bp.patch("/api/conversations/<int:conversation_id>")
-    def rename_conversation(conversation_id: int) -> Any:
+    def update_conversation(conversation_id: int) -> Any:
         username = _get_current_user(users_file)
         if not username:
             return jsonify({"ok": False, "error": "请先登录"}), 401
 
+        runtime_settings = get_runtime_state().settings
         payload = request.get_json(silent=True) or {}
-        title = str(payload.get("title", "")).strip()
+        if not isinstance(payload, dict):
+            return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
+
+        has_title = "title" in payload
+        has_model = "model" in payload
+        has_reasoning_effort = "reasoning_effort" in payload
+        has_thinking_level = "thinking_level" in payload
+        if not any((has_title, has_model, has_reasoning_effort, has_thinking_level)):
+            return jsonify({"ok": False, "error": "未提供可更新的字段"}), 400
+
+        title = str(payload.get("title", "")).strip() if has_title else ""
+        requested_model = str(payload.get("model", "")).strip() if has_model else ""
         logger.info(
-            "重命名会话请求: 用户=%s 会话ID=%s 新标题长度=%s",
+            "更新会话请求: 用户=%s 会话ID=%s 标题=%s 模型=%s effort=%s level=%s",
             username,
             conversation_id,
             len(title),
+            requested_model,
+            str(payload.get("reasoning_effort", "")).strip(),
+            str(payload.get("thinking_level", "")).strip(),
         )
-        if not title:
+        if has_title and not title:
             return jsonify({"ok": False, "error": "会话名称不能为空"}), 400
-        title = title[:60]
 
         with open_db_connection(db_file) as conn:
-            row = conn.execute(
+            current = conn.execute(
                 """
-                SELECT id
+                SELECT id, title, model, reasoning_effort, thinking_level, created_at, updated_at
                 FROM conversations
                 WHERE id = ? AND username = ?
                 """,
                 (conversation_id, username),
             ).fetchone()
-            if row is None:
-                logger.warning("重命名会话失败: 会话不存在 用户=%s 会话ID=%s", username, conversation_id)
+            if current is None:
+                logger.warning("更新会话失败: 会话不存在 用户=%s 会话ID=%s", username, conversation_id)
                 return jsonify({"ok": False, "error": "会话不存在"}), 404
 
+            current_model = normalize_model_selection(
+                str(current["model"]),
+                runtime_settings.model_options,
+                fallback_to_first=True,
+            )
+            target_model = requested_model or current_model
+            model_option = resolve_model_option(target_model, runtime_settings.model_options)
+            if model_option is None:
+                return jsonify({"ok": False, "error": "无效的模型"}), 400
+
+            raw_reasoning_effort = (
+                payload.get("reasoning_effort", "")
+                if has_reasoning_effort
+                else ("" if has_model else _get_row_choice_value(current, "reasoning_effort"))
+            )
+            raw_thinking_level = (
+                payload.get("thinking_level", "")
+                if has_thinking_level
+                else ("" if has_model else _get_row_choice_value(current, "thinking_level"))
+            )
+            conversation_settings = resolve_conversation_model_settings(
+                model_option,
+                reasoning_effort=raw_reasoning_effort,
+                thinking_level=raw_thinking_level,
+                strict=has_model or has_reasoning_effort or has_thinking_level,
+            )
+
+            updated_title = title[:60] if has_title else str(current["title"])
             conn.execute(
                 """
                 UPDATE conversations
-                SET title = ?, updated_at = CURRENT_TIMESTAMP
+                SET title = ?, model = ?, reasoning_effort = ?, thinking_level = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (title, conversation_id),
+                (
+                    updated_title,
+                    model_option.id,
+                    conversation_settings.reasoning_effort,
+                    conversation_settings.thinking_level,
+                    conversation_id,
+                ),
             )
             conn.commit()
 
             updated = conn.execute(
                 """
-                SELECT id, title, model, created_at, updated_at
+                SELECT id, title, model, reasoning_effort, thinking_level, created_at, updated_at
                 FROM conversations
                 WHERE id = ?
                 """,
                 (conversation_id,),
             ).fetchone()
-        logger.info("重命名会话完成: 用户=%s 会话ID=%s 新标题=%s", username, conversation_id, updated["title"])
 
-        runtime_settings = get_runtime_state().settings
+        logger.info(
+            "更新会话完成: 用户=%s 会话ID=%s 标题=%s 模型=%s effort=%s level=%s",
+            username,
+            conversation_id,
+            updated["title"],
+            updated["model"],
+            updated["reasoning_effort"],
+            updated["thinking_level"],
+        )
         return jsonify(
             {
                 "ok": True,
@@ -321,6 +403,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                         runtime_settings.model_options,
                         fallback_to_first=True,
                     ),
+                    runtime_settings.model_options,
                 ),
             }
         )
@@ -340,21 +423,34 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         if model_option is None:
             return jsonify({"ok": False, "error": "无效的模型"}), 400
 
+        conversation_settings = resolve_conversation_model_settings(
+            model_option,
+            reasoning_effort=payload.get("reasoning_effort", ""),
+            thinking_level=payload.get("thinking_level", ""),
+            strict=True,
+        )
+
         title = str(payload.get("title", "新对话")).strip() or "新对话"
         with open_db_connection(db_file) as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO conversations (username, title, model)
-                VALUES (?, ?, ?)
+                INSERT INTO conversations (username, title, model, reasoning_effort, thinking_level)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (username, title[:60], model_option.id),
+                (
+                    username,
+                    title[:60],
+                    model_option.id,
+                    conversation_settings.reasoning_effort,
+                    conversation_settings.thinking_level,
+                ),
             )
             conversation_id = cursor.lastrowid
             conn.commit()
 
             row = conn.execute(
                 """
-                SELECT id, title, model, created_at, updated_at
+                SELECT id, title, model, reasoning_effort, thinking_level, created_at, updated_at
                 FROM conversations
                 WHERE id = ?
                 """,
@@ -366,7 +462,11 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             jsonify(
                 {
                     "ok": True,
-                    "conversation": _serialize_conversation_row(row, model_option.id),
+                    "conversation": _serialize_conversation_row(
+                        row,
+                        model_option.id,
+                        runtime_settings.model_options,
+                    ),
                 }
             ),
             201,
@@ -382,7 +482,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         with open_db_connection(db_file) as conn:
             conv = conn.execute(
                 """
-                SELECT id, model
+                SELECT id, model, reasoning_effort, thinking_level
                 FROM conversations
                 WHERE id = ? AND username = ?
                 """,
@@ -459,6 +559,32 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     runtime_settings.model_options,
                     fallback_to_first=True,
                 ),
+                "reasoning_effort": resolve_conversation_model_settings(
+                    resolve_model_option(
+                        normalize_model_selection(
+                            str(conv["model"]),
+                            runtime_settings.model_options,
+                            fallback_to_first=True,
+                        ),
+                        runtime_settings.model_options,
+                    ),
+                    reasoning_effort=_get_row_choice_value(conv, "reasoning_effort"),
+                    thinking_level=_get_row_choice_value(conv, "thinking_level"),
+                    strict=False,
+                ).reasoning_effort,
+                "thinking_level": resolve_conversation_model_settings(
+                    resolve_model_option(
+                        normalize_model_selection(
+                            str(conv["model"]),
+                            runtime_settings.model_options,
+                            fallback_to_first=True,
+                        ),
+                        runtime_settings.model_options,
+                    ),
+                    reasoning_effort=_get_row_choice_value(conv, "reasoning_effort"),
+                    thinking_level=_get_row_choice_value(conv, "thinking_level"),
+                    strict=False,
+                ).thinking_level,
                 "messages": messages,
             }
         )

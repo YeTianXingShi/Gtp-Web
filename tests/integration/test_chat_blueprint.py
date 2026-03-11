@@ -154,17 +154,19 @@ def test_unicode_image_attachment_preview_uses_safe_inline_disposition(logged_in
 
 def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": []},\n'
+            '  "google": {"image_model": "", "models": [{"name": "gemini-2.0-flash", "thinking": false}]}\n'
+            '}\n'
+        ),
         openai_env_text=(
             "OPENAI_BASE_URL=\n"
             "OPENAI_API_KEY=\n"
-            "OPENAI_MODELS=\n"
-            "OPENAI_IMAGE_MODEL=\n"
         ),
         google_env_text=(
             "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
             "GOOGLE_API_KEY=google-test-key\n"
-            "GOOGLE_MODELS=gemini-2.0-flash\n"
-            "GOOGLE_IMAGE_MODEL=\n"
         ),
     )
     client = app.test_client()
@@ -213,11 +215,15 @@ def test_google_action_payload_generates_assistant_image_with_openai_provider(ap
         '}'
     )
     app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "dall-e-3", "models": [{"name": "gpt-4o-mini"}]},\n'
+            '  "google": {"image_model": "", "models": [{"name": "gemini-2.0-flash", "thinking": false}]}\n'
+            '}\n'
+        ),
         google_env_text=(
             "GOOGLE_BASE_URL=\n"
             "GOOGLE_API_KEY=google-test-key\n"
-            "GOOGLE_MODELS=gemini-2.0-flash\n"
-            "GOOGLE_IMAGE_MODEL=\n"
         ),
         google_stream_text=action_payload,
     )
@@ -269,11 +275,18 @@ def test_google_action_payload_generates_assistant_image_with_openai_provider(ap
 
 def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
     app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {\n'
+            '    "image_model": "dall-e-3",\n'
+            '    "models": [{"name": "gpt-5-mini", "reasoning": {"effort": "high", "summary": "auto"}}]\n'
+            '  },\n'
+            '  "google": {"image_model": "", "models": []}\n'
+            '}\n'
+        ),
         openai_env_text=(
             "OPENAI_BASE_URL=https://example.invalid/v1\n"
             "OPENAI_API_KEY=test-key\n"
-            "OPENAI_MODELS=gpt-5-mini\n"
-            "OPENAI_IMAGE_MODEL=dall-e-3\n"
         ),
         openai_response_events=[
             {"type": "response.reasoning_summary_text.delta", "delta": "先整理已知条件。"},
@@ -314,6 +327,61 @@ def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
 
     assert assistant_message["content"] == "这是最终回复。"
     assert assistant_message["reasoning"] == "先整理已知条件。再给出结论。"
+    seen_requests = app.extensions["seen_openai_requests"]
+    assert seen_requests[0]["reasoning"] == {"effort": "high", "summary": "auto"}
+
+
+def test_google_model_specific_thinking_config_is_applied(app_builder):
+    app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": []},\n'
+            '  "google": {\n'
+            '    "image_model": "",\n'
+            '    "models": [{"name": "gemini-2.5-pro", "thinking": {"include_thoughts": true, "budget": 1024}}]\n'
+            '  }\n'
+            '}\n'
+        ),
+        openai_env_text=(
+            "OPENAI_BASE_URL=\n"
+            "OPENAI_API_KEY=\n"
+        ),
+        google_env_text=(
+            "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
+            "GOOGLE_API_KEY=google-test-key\n"
+        ),
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "google:gemini-2.5-pro"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "google:gemini-2.5-pro",
+            "content": "请多思考一下",
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    _ = resp.get_data(as_text=True)
+
+    seen_requests = app.extensions["seen_google_requests"]
+    assert seen_requests
+    config = seen_requests[0]["config"]
+    thinking_config = getattr(config, "thinking_config", None)
+    assert thinking_config is not None
+    assert getattr(thinking_config, "include_thoughts", None) is True
+    assert getattr(thinking_config, "thinking_budget", None) == 1024
 
 
 
@@ -332,11 +400,15 @@ def test_google_imagen_model_uses_generate_images(app_builder):
             "FLASK_DEBUG=1\n"
             "IMAGE_TOOL_PROVIDER=google\n"
         ),
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": []},\n'
+            '  "google": {"image_model": "imagen-3.0-generate-002", "models": [{"name": "gemini-2.0-flash", "thinking": false}]}\n'
+            '}\n'
+        ),
         google_env_text=(
             "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
             "GOOGLE_API_KEY=google-test-key\n"
-            "GOOGLE_MODELS=gemini-2.0-flash\n"
-            "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002\n"
         ),
         google_stream_text=action_payload,
     )
@@ -393,11 +465,15 @@ def test_google_gemini_image_model_uses_generate_content(app_builder):
             "FLASK_DEBUG=1\n"
             "IMAGE_TOOL_PROVIDER=google\n"
         ),
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": []},\n'
+            '  "google": {"image_model": "gemini-3.1-flash-image-preview", "models": [{"name": "gemini-2.0-flash", "thinking": false}]}\n'
+            '}\n'
+        ),
         google_env_text=(
             "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
             "GOOGLE_API_KEY=google-test-key\n"
-            "GOOGLE_MODELS=gemini-2.0-flash\n"
-            "GOOGLE_IMAGE_MODEL=gemini-3.1-flash-image-preview\n"
         ),
         google_stream_text=action_payload,
     )
@@ -454,17 +530,19 @@ def test_empty_image_model_disables_text2im_capability(app_builder):
         '}'
     )
     app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {"image_model": "", "models": [{"name": "gpt-4o-mini"}]},\n'
+            '  "google": {"image_model": "", "models": [{"name": "gemini-2.0-flash", "thinking": false}]}\n'
+            '}\n'
+        ),
         openai_env_text=(
             "OPENAI_BASE_URL=https://example.invalid/v1\n"
             "OPENAI_API_KEY=test-key\n"
-            "OPENAI_MODELS=gpt-4o-mini\n"
-            "OPENAI_IMAGE_MODEL=\n"
         ),
         google_env_text=(
             "GOOGLE_BASE_URL=\n"
             "GOOGLE_API_KEY=google-test-key\n"
-            "GOOGLE_MODELS=gemini-2.0-flash\n"
-            "GOOGLE_IMAGE_MODEL=\n"
         ),
         google_stream_text=action_payload,
     )

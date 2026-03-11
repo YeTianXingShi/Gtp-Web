@@ -11,11 +11,18 @@ def _create_conversation(client, model: str = "openai:gpt-4o-mini") -> int:
 
 def _create_reasoning_conversation(app_builder):
     app = app_builder(
+        models_config_text=(
+            '{\n'
+            '  "openai": {\n'
+            '    "image_model": "dall-e-3",\n'
+            '    "models": [{"name": "gpt-5-mini", "reasoning": {"effort": "high", "summary": "auto"}}]\n'
+            '  },\n'
+            '  "google": {"image_model": "", "models": []}\n'
+            '}\n'
+        ),
         openai_env_text=(
             "OPENAI_BASE_URL=https://example.invalid/v1\n"
             "OPENAI_API_KEY=test-key\n"
-            "OPENAI_MODELS=gpt-5-mini\n"
-            "OPENAI_IMAGE_MODEL=dall-e-3\n"
         ),
         openai_response_events=[
             {"type": "response.reasoning_summary_text.delta", "delta": "先整理已知条件。"},

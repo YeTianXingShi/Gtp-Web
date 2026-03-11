@@ -186,6 +186,7 @@ def _create_test_app(
     app_env_text: str | None = None,
     openai_env_text: str | None = None,
     google_env_text: str | None = None,
+    models_config_text: str | None = None,
     openai_stream_text: str = "ok",
     openai_response_events: list[object] | None = None,
     google_stream_text: str = "ok",
@@ -199,15 +200,12 @@ def _create_test_app(
 
     for key in (
         "ENV_DIR",
+        "MODEL_CONFIG_FILE",
         "IMAGE_TOOL_PROVIDER",
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
-        "OPENAI_MODELS",
-        "OPENAI_IMAGE_MODEL",
         "GOOGLE_BASE_URL",
         "GOOGLE_API_KEY",
-        "GOOGLE_MODELS",
-        "GOOGLE_IMAGE_MODEL",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -228,8 +226,6 @@ def _create_test_app(
         or (
             "OPENAI_BASE_URL=https://example.invalid/v1\n"
             "OPENAI_API_KEY=test-key\n"
-            "OPENAI_MODELS=gpt-4o-mini\n"
-            "OPENAI_IMAGE_MODEL=dall-e-3\n"
         ),
         encoding="utf-8",
     )
@@ -238,8 +234,25 @@ def _create_test_app(
         or (
             "GOOGLE_BASE_URL=\n"
             "GOOGLE_API_KEY=\n"
-            "GOOGLE_MODELS=\n"
-            "GOOGLE_IMAGE_MODEL=\n"
+        ),
+        encoding="utf-8",
+    )
+    models_file = tmp_path / "models.jsonc"
+    models_file.write_text(
+        models_config_text
+        or (
+            '{\n'
+            '  "openai": {\n'
+            '    "image_model": "dall-e-3",\n'
+            '    "models": [\n'
+            '      {"name": "gpt-4o-mini"}\n'
+            '    ]\n'
+            '  },\n'
+            '  "google": {\n'
+            '    "image_model": "",\n'
+            '    "models": []\n'
+            '  }\n'
+            '}\n'
         ),
         encoding="utf-8",
     )
@@ -256,6 +269,7 @@ def _create_test_app(
         encoding="utf-8",
     )
     monkeypatch.setenv("ENV_DIR", str(env_dir))
+    monkeypatch.setenv("MODEL_CONFIG_FILE", str(models_file))
 
     monkeypatch.setenv("USERS_FILE", str(users_file))
     monkeypatch.setenv("CHAT_DB_FILE", str(tmp_path / "chat.db"))

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from dotenv import dotenv_values
 from flask import Flask, current_app
@@ -11,32 +11,15 @@ from openai import OpenAI
 
 from gtpweb.ai_providers import ModelOption, build_model_options
 from gtpweb.attachments import parse_allowed_attachment_exts
-from gtpweb.config import (
-    DEFAULT_OPENAI_IMAGE_MODEL,
-    AppConfig,
-    parse_bool,
-    parse_image_tool_provider,
-    parse_models,
-)
-from gtpweb.utils import parse_model_match_patterns, safe_int
+from gtpweb.config import AppConfig, load_model_catalog, parse_bool, parse_image_tool_provider
+from gtpweb.utils import safe_int
 
 HOT_RELOADABLE_ENV_KEYS = {
     "IMAGE_TOOL_PROVIDER",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
-    "OPENAI_MODELS",
-    "OPENAI_IMAGE_MODEL",
-    "OPENAI_REASONING_EFFORT",
-    "OPENAI_REASONING_SUMMARY",
-    "OPENAI_REASONING_MODEL_PATTERNS",
     "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
-    "GOOGLE_MODELS",
-    "GOOGLE_IMAGE_MODEL",
-    "GOOGLE_INCLUDE_THOUGHTS",
-    "GOOGLE_THINKING_LEVEL",
-    "GOOGLE_THINKING_BUDGET",
-    "GOOGLE_THINKING_MODEL_PATTERNS",
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
@@ -51,17 +34,10 @@ class RuntimeSettings:
     openai_api_key: str
     openai_models: list[str]
     openai_image_model: str
-    openai_reasoning_effort: str
-    openai_reasoning_summary: str
-    openai_reasoning_model_patterns: list[str]
     google_base_url: str
     google_api_key: str
     google_models: list[str]
     google_image_model: str
-    google_include_thoughts: bool
-    google_thinking_level: str
-    google_thinking_budget: int | None
-    google_thinking_model_patterns: list[str]
     models: list[str]
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
@@ -129,89 +105,25 @@ def build_runtime_settings(
         parsed = safe_int(str(env_values[key]))
         return parsed or fallback
 
-    def choose_optional_int(key: str, fallback: int | None) -> int | None:
-        if key not in env_values:
-            return fallback
-        value = str(env_values[key]).strip()
-        if not value:
-            return None
-        return safe_int(value)
-
-    def choose_bool(key: str, fallback: bool) -> bool:
-        if key not in env_values:
-            return fallback
-        return parse_bool(str(env_values[key]), default=fallback)
-
-    def choose_models(key: str, fallback: list[str]) -> list[str]:
-        if key not in env_values:
-            return list(fallback)
-        raw_models = str(env_values[key]).strip()
-        return parse_models(raw_models, allow_empty=True)
-
     def choose_allowed_exts(fallback: set[str]) -> set[str]:
         if "ALLOWED_ATTACHMENT_EXTS" not in env_values:
             return set(fallback)
         raw_exts = str(env_values["ALLOWED_ATTACHMENT_EXTS"]).strip()
         return parse_allowed_attachment_exts(raw_exts) if raw_exts else set(fallback)
 
-    def choose_patterns(key: str, fallback: list[str]) -> list[str]:
-        if key not in env_values:
-            return list(fallback)
-        return parse_model_match_patterns(str(env_values[key]), default=fallback)
-
-    def choose_openai_image_model(current_models: list[str]) -> str:
-        if "OPENAI_IMAGE_MODEL" in env_values:
-            return str(env_values["OPENAI_IMAGE_MODEL"]).strip()
-        if current_models:
-            return base_config.openai_image_model or DEFAULT_OPENAI_IMAGE_MODEL
-        return ""
+    model_catalog = load_model_catalog(base_config.model_config_file)
 
     image_tool_provider = parse_image_tool_provider(
         choose_text("IMAGE_TOOL_PROVIDER", base_config.image_tool_provider)
     )
     openai_base_url = choose_text("OPENAI_BASE_URL", base_config.openai_base_url, allow_empty=True)
     openai_api_key = choose_text("OPENAI_API_KEY", base_config.openai_api_key, allow_empty=True)
-    openai_models = choose_models("OPENAI_MODELS", base_config.openai_models)
-    openai_image_model = choose_openai_image_model(openai_models)
-    openai_reasoning_effort = choose_text(
-        "OPENAI_REASONING_EFFORT",
-        base_config.openai_reasoning_effort,
-        allow_empty=True,
-    ).lower()
-    openai_reasoning_summary = choose_text(
-        "OPENAI_REASONING_SUMMARY",
-        base_config.openai_reasoning_summary,
-        allow_empty=True,
-    ).lower()
-    openai_reasoning_model_patterns = choose_patterns(
-        "OPENAI_REASONING_MODEL_PATTERNS",
-        base_config.openai_reasoning_model_patterns,
-    )
+    openai_models = [item.name for item in model_catalog.openai.models]
+    openai_image_model = model_catalog.openai.image_model
     google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
-    google_models = choose_models("GOOGLE_MODELS", base_config.google_models)
-    google_image_model = choose_text(
-        "GOOGLE_IMAGE_MODEL",
-        base_config.google_image_model,
-        allow_empty=True,
-    )
-    google_include_thoughts = choose_bool(
-        "GOOGLE_INCLUDE_THOUGHTS",
-        base_config.google_include_thoughts,
-    )
-    google_thinking_level = choose_text(
-        "GOOGLE_THINKING_LEVEL",
-        base_config.google_thinking_level,
-        allow_empty=True,
-    ).lower()
-    google_thinking_budget = choose_optional_int(
-        "GOOGLE_THINKING_BUDGET",
-        base_config.google_thinking_budget,
-    )
-    google_thinking_model_patterns = choose_patterns(
-        "GOOGLE_THINKING_MODEL_PATTERNS",
-        base_config.google_thinking_model_patterns,
-    )
+    google_models = [item.name for item in model_catalog.google.models]
+    google_image_model = model_catalog.google.image_model
 
     use_openai = bool(openai_models or openai_image_model)
     use_google = bool(google_models or google_image_model)
@@ -223,7 +135,7 @@ def build_runtime_settings(
     if use_google and not google_api_key:
         raise ValueError("GOOGLE_API_KEY is required when Google is configured.")
 
-    model_options = build_model_options(openai_models, google_models)
+    model_options = build_model_options(model_catalog.openai.models, model_catalog.google.models)
     models = [item.id for item in model_options]
     max_upload_mb = choose_int("MAX_UPLOAD_MB", base_config.max_upload_mb)
     max_attachments_per_message = choose_int(
@@ -239,17 +151,10 @@ def build_runtime_settings(
         openai_api_key=openai_api_key,
         openai_models=openai_models,
         openai_image_model=openai_image_model,
-        openai_reasoning_effort=openai_reasoning_effort,
-        openai_reasoning_summary=openai_reasoning_summary,
-        openai_reasoning_model_patterns=openai_reasoning_model_patterns,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
         google_image_model=google_image_model,
-        google_include_thoughts=google_include_thoughts,
-        google_thinking_level=google_thinking_level,
-        google_thinking_budget=google_thinking_budget,
-        google_thinking_model_patterns=google_thinking_model_patterns,
         models=models,
         model_options=model_options,
         max_upload_mb=max_upload_mb,
@@ -308,7 +213,85 @@ def get_runtime_state() -> RuntimeState:
 
 
 
-def apply_runtime_env_values(
+def _snapshot_model_config_keys(model_options: Iterable[ModelOption], provider: str) -> tuple[dict[str, Any], ...]:
+    snapshots: list[dict[str, Any]] = []
+    for option in model_options:
+        if option.provider != provider:
+            continue
+        item: dict[str, Any] = {
+            "name": option.model_name,
+            "label": option.label,
+        }
+        if provider == "openai":
+            item["reasoning"] = (
+                None
+                if option.openai_reasoning is None
+                else {
+                    "effort": option.openai_reasoning.effort,
+                    "summary": option.openai_reasoning.summary,
+                }
+            )
+        elif provider == "google":
+            item["thinking"] = (
+                None
+                if option.google_thinking is None
+                else {
+                    "include_thoughts": option.google_thinking.include_thoughts,
+                    "level": option.google_thinking.level,
+                    "budget": option.google_thinking.budget,
+                }
+            )
+        snapshots.append(item)
+    return tuple(snapshots)
+
+
+
+def _collect_runtime_setting_changes(
+    old_settings: RuntimeSettings,
+    new_settings: RuntimeSettings,
+) -> list[str]:
+    changed_keys: list[str] = []
+    if old_settings.image_tool_provider != new_settings.image_tool_provider:
+        changed_keys.append("IMAGE_TOOL_PROVIDER")
+    if old_settings.openai_base_url != new_settings.openai_base_url:
+        changed_keys.append("OPENAI_BASE_URL")
+    if old_settings.openai_api_key != new_settings.openai_api_key:
+        changed_keys.append("OPENAI_API_KEY")
+    if old_settings.openai_models != new_settings.openai_models:
+        changed_keys.append("OPENAI_MODELS")
+    if old_settings.openai_image_model != new_settings.openai_image_model:
+        changed_keys.append("OPENAI_IMAGE_MODEL")
+    if _snapshot_model_config_keys(old_settings.model_options, "openai") != _snapshot_model_config_keys(
+        new_settings.model_options,
+        "openai",
+    ):
+        changed_keys.append("OPENAI_MODEL_CONFIG")
+    if old_settings.google_base_url != new_settings.google_base_url:
+        changed_keys.append("GOOGLE_BASE_URL")
+    if old_settings.google_api_key != new_settings.google_api_key:
+        changed_keys.append("GOOGLE_API_KEY")
+    if old_settings.google_models != new_settings.google_models:
+        changed_keys.append("GOOGLE_MODELS")
+    if old_settings.google_image_model != new_settings.google_image_model:
+        changed_keys.append("GOOGLE_IMAGE_MODEL")
+    if _snapshot_model_config_keys(old_settings.model_options, "google") != _snapshot_model_config_keys(
+        new_settings.model_options,
+        "google",
+    ):
+        changed_keys.append("GOOGLE_MODEL_CONFIG")
+    if old_settings.max_upload_mb != new_settings.max_upload_mb:
+        changed_keys.append("MAX_UPLOAD_MB")
+    if old_settings.max_attachments_per_message != new_settings.max_attachments_per_message:
+        changed_keys.append("MAX_ATTACHMENTS_PER_MESSAGE")
+    if old_settings.max_text_file_chars != new_settings.max_text_file_chars:
+        changed_keys.append("MAX_TEXT_FILE_CHARS")
+    if old_settings.allowed_attachment_exts != new_settings.allowed_attachment_exts:
+        changed_keys.append("ALLOWED_ATTACHMENT_EXTS")
+    return changed_keys
+
+
+
+def apply_runtime_config_values(
     app: Flask,
     base_config: AppConfig,
     new_env_values: dict[str, str],
@@ -318,13 +301,15 @@ def apply_runtime_env_values(
     old_settings = runtime_state.settings
     new_settings = build_runtime_settings(base_config, env_values=new_env_values)
 
-    changed_keys = sorted(
+    changed_env_keys = sorted(
         key
         for key in (set(old_env_values) | set(new_env_values))
         if old_env_values.get(key, "") != new_env_values.get(key, "")
     )
-    applied_keys = [key for key in changed_keys if key in HOT_RELOADABLE_ENV_KEYS]
-    restart_required_keys = [key for key in changed_keys if key not in HOT_RELOADABLE_ENV_KEYS]
+    changed_setting_keys = _collect_runtime_setting_changes(old_settings, new_settings)
+
+    applied_keys = sorted(set(key for key in changed_env_keys if key in HOT_RELOADABLE_ENV_KEYS) | set(changed_setting_keys))
+    restart_required_keys = [key for key in changed_env_keys if key not in HOT_RELOADABLE_ENV_KEYS]
 
     runtime_state.settings = new_settings
     runtime_state.env_values = dict(new_env_values)
@@ -351,3 +336,12 @@ def apply_runtime_env_values(
         "applied_keys": applied_keys,
         "restart_required_keys": restart_required_keys,
     }
+
+
+
+def apply_runtime_env_values(
+    app: Flask,
+    base_config: AppConfig,
+    new_env_values: dict[str, str],
+) -> dict[str, list[str]]:
+    return apply_runtime_config_values(app, base_config, new_env_values)

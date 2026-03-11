@@ -7,14 +7,15 @@ from typing import Any
 
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for
 
-from gtpweb.config import AppConfig, ENV_GROUP_SPECS
-from gtpweb.runtime_state import apply_runtime_env_values, read_env_files_values
+from gtpweb.config import AppConfig, ENV_GROUP_SPECS, parse_model_catalog_text
+from gtpweb.runtime_state import apply_runtime_config_values, read_env_files_values
 from gtpweb.user_store import get_user_record, normalize_users_config, save_users_config, users_config_to_text
 
 logger = logging.getLogger(__name__)
 
 
 CONFIG_FILE_AUTH_USERS = "auth_users"
+CONFIG_FILE_MODELS = "models"
 
 
 def _get_current_user_record(users_file: Path) -> dict[str, Any] | None:
@@ -65,6 +66,14 @@ def _build_config_file_items(config: AppConfig) -> dict[str, dict[str, Any]]:
             "requires_restart": False,
             "format": "json",
         },
+        CONFIG_FILE_MODELS: {
+            "id": CONFIG_FILE_MODELS,
+            "label": "模型配置",
+            "description": "按模型维护 OpenAI / Google 的可用模型、图片模型与 reasoning / thinking 参数，支持 JSON 注释，保存后立即热更新。",
+            "path": config.model_config_file,
+            "requires_restart": False,
+            "format": "jsonc",
+        },
     }
     for spec, path in zip(ENV_GROUP_SPECS, config.env_files):
         config_files[f"env_{spec.key}"] = {
@@ -103,6 +112,10 @@ def _read_config_file_content(item: dict[str, Any]) -> str:
             return users_config_to_text({"users": []})
         normalized = normalize_users_config(json.loads(path.read_text(encoding="utf-8")))
         return users_config_to_text(normalized)
+    if item["id"] == CONFIG_FILE_MODELS:
+        if not path.exists():
+            return ""
+        return path.read_text(encoding="utf-8")
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
@@ -135,6 +148,13 @@ def _save_config_file_content(
 
         save_users_config(path, normalized, require_admin=True)
         return users_config_to_text(normalized)
+
+    if item["id"] == CONFIG_FILE_MODELS:
+        parse_model_catalog_text(raw_content)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        normalized_text = _normalize_text_file_content(raw_content)
+        path.write_text(normalized_text, encoding="utf-8")
+        return normalized_text
 
     path.parent.mkdir(parents=True, exist_ok=True)
     normalized_text = _normalize_text_file_content(raw_content)
@@ -212,8 +232,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
                 raw_content,
                 current_username=current_record["username"],
             )
-            if item["format"] == "dotenv":
-                hot_reload = apply_runtime_env_values(
+            if item["format"] in {"dotenv", "jsonc"}:
+                hot_reload = apply_runtime_config_values(
                     current_app,
                     config,
                     read_env_files_values(config.env_files),

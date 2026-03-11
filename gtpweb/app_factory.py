@@ -61,6 +61,7 @@ def create_app() -> Flask:
     app.config["ENV_DIR"] = str(config.env_dir)
     app.config["ENV_FILES"] = [str(path) for path in config.env_files]
     app.config["USERS_FILE"] = str(config.users_file)
+    app.config["MODEL_CONFIG_FILE"] = str(config.model_config_file)
 
     init_db(config.db_file)
     logger.info("应用启动: 数据库初始化完成 数据库=%s", config.db_file)

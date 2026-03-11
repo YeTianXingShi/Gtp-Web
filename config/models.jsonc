@@ -1,0 +1,40 @@
+{
+  // 统一维护所有可用模型；标准 JSON 也可以，另外支持 // 与 /* */ 注释。
+  "openai": {
+    "image_model": "",
+    "defaults": {
+      "reasoning": {
+        "effort": "high",
+        "summary": "auto"
+      }
+    },
+    "models": [
+      {
+        "name": "gpt-5.2"
+      },
+      {
+        "name": "gpt-5.4"
+      }
+    ]
+  },
+  "google": {
+    "image_model": "gemini-3.1-flash-image-preview",
+    "defaults": {
+      "thinking": {
+        "include_thoughts": true,
+        "level": "medium"
+      }
+    },
+    "models": [
+      {
+        "name": "gemini-3-flash-preview"
+      },
+      {
+        "name": "gemini-3-pro-preview"
+      },
+      {
+        "name": "gemini-3.1-pro-preview"
+      }
+    ]
+  }
+}

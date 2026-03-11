@@ -44,7 +44,6 @@ from gtpweb.openai_stream import (
     extract_status_error_message,
     extract_text_delta,
     sse_payload,
-    supports_openai_reasoning,
 )
 from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
@@ -55,19 +54,18 @@ logger = logging.getLogger(__name__)
 
 def _build_openai_reasoning_config(
     *,
-    model_name: str,
-    reasoning_effort: str,
-    reasoning_summary: str,
-    model_patterns: list[str],
+    reasoning_settings: Any,
 ) -> dict[str, Any] | None:
-    if not supports_openai_reasoning(model_name, model_patterns):
+    if reasoning_settings is None:
         return None
 
     config: dict[str, Any] = {}
-    if reasoning_effort:
-        config["effort"] = reasoning_effort
-    if reasoning_summary:
-        config["summary"] = reasoning_summary
+    effort = str(getattr(reasoning_settings, "effort", "") or "").strip().lower()
+    summary = str(getattr(reasoning_settings, "summary", "") or "").strip().lower()
+    if effort:
+        config["effort"] = effort
+    if summary:
+        config["summary"] = summary
     return config or None
 
 
@@ -438,10 +436,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     if openai_client is None:
                         raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
                     reasoning_config = _build_openai_reasoning_config(
-                        model_name=upstream_model,
-                        reasoning_effort=runtime_settings.openai_reasoning_effort,
-                        reasoning_summary=runtime_settings.openai_reasoning_summary,
-                        model_patterns=runtime_settings.openai_reasoning_model_patterns,
+                        reasoning_settings=model_option.openai_reasoning,
                     )
                     if reasoning_config is not None:
                         request_kwargs = {
@@ -515,11 +510,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                         "contents": build_google_contents(completion_messages),
                     }
                     google_config = build_google_generate_content_config(
-                        model_name=upstream_model,
-                        include_thoughts=runtime_settings.google_include_thoughts,
-                        thinking_level=runtime_settings.google_thinking_level,
-                        thinking_budget=runtime_settings.google_thinking_budget,
-                        model_patterns=runtime_settings.google_thinking_model_patterns,
+                        thinking_settings=model_option.google_thinking,
                     )
                     if google_config is not None:
                         request_kwargs["config"] = google_config

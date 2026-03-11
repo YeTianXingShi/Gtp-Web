@@ -35,6 +35,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     file_ids = [item["id"] for item in files_data["files"]]
     assert file_ids == [
         "auth_users",
+        "models",
         "env_app",
         "env_openai",
         "env_google",
@@ -89,6 +90,31 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert save_app_data["hot_reload"]["applied_keys"] == ["IMAGE_TOOL_PROVIDER"]
     assert save_app_data["hot_reload"]["restart_required_keys"] == []
 
+    models_config_resp = admin_client.get("/api/admin/config-files/models")
+    assert models_config_resp.status_code == 200
+    models_config_data = models_config_resp.get_json()
+    assert models_config_data["format"] == "jsonc"
+    assert '"gpt-4o-mini"' in models_config_data["content"]
+
+    models_content = (
+        "{\n"
+        "  // 模型配置支持注释\n"
+        "  \"openai\": {\n"
+        "    \"image_model\": \"gpt-image-1\",\n"
+        "    \"models\": [\n"
+        "      {\"name\": \"gpt-4o-mini\"},\n"
+        "      {\"name\": \"gpt-4.1-mini\", \"reasoning\": {\"summary\": \"auto\"}}\n"
+        "    ]\n"
+        "  },\n"
+        "  \"google\": {\n"
+        "    \"image_model\": \"imagen-3.0-generate-002\",\n"
+        "    \"models\": [\n"
+        "      {\"name\": \"gemini-2.0-flash\", \"thinking\": false}\n"
+        "    ]\n"
+        "  }\n"
+        "}\n"
+    )
+
     openai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
     assert openai_config_resp.status_code == 200
     openai_config_data = openai_config_resp.get_json()
@@ -101,8 +127,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
             "content": (
                 "OPENAI_BASE_URL=https://new.example/v1\n"
                 "OPENAI_API_KEY=new-key\n"
-                "OPENAI_MODELS=gpt-4o-mini,gpt-4.1-mini\n"
-                "OPENAI_IMAGE_MODEL=gpt-image-1\n"
             )
         },
     )
@@ -111,8 +135,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert set(save_openai_data["hot_reload"]["applied_keys"]) == {
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
-        "OPENAI_MODELS",
-        "OPENAI_IMAGE_MODEL",
     }
     assert save_openai_data["hot_reload"]["restart_required_keys"] == []
 
@@ -127,8 +149,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
             "content": (
                 "GOOGLE_BASE_URL=https://gemini-proxy.example\n"
                 "GOOGLE_API_KEY=google-new-key\n"
-                "GOOGLE_MODELS=gemini-2.0-flash\n"
-                "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002\n"
             )
         },
     )
@@ -137,10 +157,24 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert set(save_google_data["hot_reload"]["applied_keys"]) == {
         "GOOGLE_BASE_URL",
         "GOOGLE_API_KEY",
-        "GOOGLE_MODELS",
-        "GOOGLE_IMAGE_MODEL",
     }
     assert save_google_data["hot_reload"]["restart_required_keys"] == []
+
+    save_models_resp = admin_client.put(
+        "/api/admin/config-files/models",
+        json={"content": models_content},
+    )
+    assert save_models_resp.status_code == 200
+    save_models_data = save_models_resp.get_json()
+    assert set(save_models_data["hot_reload"]["applied_keys"]) == {
+        "OPENAI_MODELS",
+        "OPENAI_IMAGE_MODEL",
+        "OPENAI_MODEL_CONFIG",
+        "GOOGLE_MODELS",
+        "GOOGLE_IMAGE_MODEL",
+        "GOOGLE_MODEL_CONFIG",
+    }
+    assert save_models_data["hot_reload"]["restart_required_keys"] == []
 
     save_attachment_resp = admin_client.put(
         "/api/admin/config-files/env_attachments",
@@ -184,13 +218,14 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     app_env_text = Path(env_files[0]).read_text(encoding="utf-8")
     openai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
     google_env_text = Path(env_files[2]).read_text(encoding="utf-8")
+    models_config_text = Path(app.config["MODEL_CONFIG_FILE"]).read_text(encoding="utf-8")
     attachments_env_text = Path(env_files[4]).read_text(encoding="utf-8")
     logging_env_text = Path(env_files[5]).read_text(encoding="utf-8")
     assert "IMAGE_TOOL_PROVIDER=google" in app_env_text
     assert "OPENAI_BASE_URL=https://new.example/v1" in openai_env_text
-    assert "OPENAI_IMAGE_MODEL=gpt-image-1" in openai_env_text
     assert "GOOGLE_BASE_URL=https://gemini-proxy.example" in google_env_text
-    assert "GOOGLE_IMAGE_MODEL=imagen-3.0-generate-002" in google_env_text
+    assert '"gpt-image-1"' in models_config_text
+    assert '"imagen-3.0-generate-002"' in models_config_text
     assert "MAX_UPLOAD_MB=8" in attachments_env_text
     assert "LOG_LEVEL=INFO" in logging_env_text
 

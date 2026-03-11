@@ -54,18 +54,17 @@ cp config/users.example.json config/users.json
 - `config/env/openai.env`
   - `OPENAI_BASE_URL`: OpenAI 或兼容网关 API 根地址，例如 `https://api.openai.com/v1`
   - `OPENAI_API_KEY`: OpenAI 或兼容服务密钥
-  - `OPENAI_MODELS`: OpenAI 来源模型列表，逗号分隔
-  - `OPENAI_REASONING_EFFORT`: 推理强度，常用 `low/medium/high`；越高通常越慢、token 越多，但推理更充分
-  - `OPENAI_REASONING_SUMMARY`: 推理摘要级别，支持 `auto/concise/detailed`
-  - `OPENAI_REASONING_MODEL_PATTERNS`: 哪些 OpenAI 模型启用推理摘要，逗号分隔，支持 `*` 通配
 - `config/env/google.env`
   - `GOOGLE_BASE_URL`: Gemini API 根地址；留空时使用官方默认地址
   - `GOOGLE_API_KEY`: Gemini API Key
-  - `GOOGLE_MODELS`: Gemini 模型列表，逗号分隔
-  - `GOOGLE_INCLUDE_THOUGHTS`: 是否返回 thought summaries（`1/0`）
-  - `GOOGLE_THINKING_LEVEL`: Gemini 3 系列优先使用的 thinking 强度，建议 `low/high`（Pro）或 `minimal/low/medium/high`（Flash）
-  - `GOOGLE_THINKING_BUDGET`: Gemini 2.5 系列可选的 thinking token 预算；当前项目仅在模型命中 `gemini-2.5*` 时传递，Gemini 3 系列建议留空
-  - `GOOGLE_THINKING_MODEL_PATTERNS`: 哪些 Gemini 模型启用 thought summaries，逗号分隔，支持 `*` 通配
+- `config/models.jsonc`
+  - 使用 JSON 结构统一维护 OpenAI / Google 的文本模型与图片模型
+  - 标准 JSON 可直接使用，另外支持 `//` 与 `/* */` 注释
+  - `openai.defaults.reasoning`: 给 OpenAI 模型设置默认 reasoning 参数
+  - `openai.models[].reasoning`: 为单个 OpenAI 模型覆盖 reasoning；可配 `effort`、`summary`
+  - `google.defaults.thinking`: 给 Gemini 模型设置默认 thinking 参数
+  - `google.models[].thinking`: 为单个 Gemini 模型覆盖 thinking；可配 `include_thoughts`、`level`、`budget`
+  - 将某个模型的 `reasoning` / `thinking` 写成 `false` 或 `null`，可显式关闭该能力
 - `config/env/storage.env`
   - `CHAT_DB_FILE`: 聊天记录数据库文件路径（默认 `./data/chat.db`）
   - `UPLOAD_DIR`: 附件存储目录（默认 `./data/uploads`）
@@ -87,16 +86,15 @@ cp config/users.example.json config/users.json
 补充说明：
 
 - 已不再读取旧版 `config/env/ai.env` 与 `AI_*` 变量；请统一迁移到 `openai.env` 与 `google.env`。
-- 后台管理页现在会将 OpenAI 与 Google Gemini 分成两个独立配置分组展示。
+- OpenAI / Google 的模型列表、图片模型与思考参数都已迁移到 `config/models.jsonc`，不再从 `.env` 读取。
+- 后台管理页现在支持直接编辑 `models.jsonc`，保存后会即时热更新模型配置。
 - 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
 - OpenAI reasoning 配置建议：
-  - `OPENAI_REASONING_SUMMARY=auto` 表示“为当前模型选择可用的最详细摘要器”；按 OpenAI 官方说明，今天对大多数 reasoning 模型来说，它通常等价于 `detailed`，但未来可能出现更细的档位。
-  - 如果你只想要较短的界面摘要，可以改成 `concise`；如果想稳定拿到较完整摘要，可用 `detailed`（前提是该模型支持）。
-  - `OPENAI_REASONING_MODEL_PATTERNS` 默认是 `gpt-5*,o1*,o3*,o4*,computer-use-preview*`，只有命中的模型才会开启推理摘要。
+  - `summary=auto` 表示让上游自动选择可用摘要级别；如果想更短可试 `concise`，想更完整可试 `detailed`。
+  - 仅 reasoning 模型需要配置 `reasoning`；普通模型可以不写该字段。
 - Gemini thinking 配置建议：
-  - 当前如果主要使用 `gemini-3*`，建议保持 `GOOGLE_THINKING_BUDGET=` 为空，重点调 `GOOGLE_THINKING_LEVEL`。
-  - 如果使用 `gemini-2.5*`，推荐先从 `GOOGLE_THINKING_BUDGET=-1` 开始；想压延迟或成本时可尝试 `1024`，复杂推理可提高到 `4096` 或更高。
-  - `GOOGLE_THINKING_MODEL_PATTERNS` 默认是 `gemini-2.5*,gemini-3*`，只有命中的模型才会开启 thought summaries。
+  - `gemini-3*` 通常优先调 `level`；`gemini-2.5*` 更适合直接配 `budget`。
+  - 如果某个 Gemini 模型不想返回 thought summaries，直接将 `thinking` 设为 `false`。
 
 ## 3. 启动
 
@@ -194,7 +192,7 @@ pytest
   - 说明上游返回了 HTML 错误页，不是模型 JSON。
   - OpenAI 兼容来源先检查 `OPENAI_BASE_URL` 是否为网关 API 根地址（通常以 `/v1` 结尾）。
 - Gemini 调用失败：
-  - 先确认 `GOOGLE_API_KEY` 有效，且模型名称在 `GOOGLE_MODELS` 中配置正确。
+  - 先确认 `GOOGLE_API_KEY` 有效，且模型名称在 `config/models.jsonc` 中配置正确。
   - 如果走代理或网关，再检查 `GOOGLE_BASE_URL` 是否填写正确。
   - 再确认当前 Python 环境已安装 `google-genai`。
 - 查看请求追踪日志：

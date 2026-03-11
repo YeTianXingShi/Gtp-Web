@@ -35,6 +35,24 @@ class _FakeChat:
         self.completions = _FakeCompletions(seen_requests, stream_text)
 
 
+class _FakeResponsesStream:
+    def __init__(self, events: list[object]):
+        self._events = list(events)
+
+    def __iter__(self):
+        yield from self._events
+
+
+class _FakeResponses:
+    def __init__(self, seen_requests: list[dict], response_events: list[object]):
+        self._seen_requests = seen_requests
+        self._response_events = list(response_events)
+
+    def create(self, **kwargs):
+        self._seen_requests.append(kwargs)
+        return _FakeResponsesStream(self._response_events)
+
+
 class _FakeImageItem:
     def __init__(self, image_bytes: bytes):
         self.b64_json = base64.b64encode(image_bytes).decode("ascii")
@@ -62,9 +80,15 @@ class _FakeOpenAI:
         seen_image_requests: list[dict],
         stream_text: str,
         image_bytes: bytes,
+        response_events: list[object] | None = None,
         **_kwargs,
     ):
         self.chat = _FakeChat(seen_requests, stream_text)
+        self.responses = _FakeResponses(
+            seen_requests,
+            response_events
+            or [{"type": "response.output_text.delta", "delta": stream_text}],
+        )
         self.images = _FakeImages(seen_image_requests, image_bytes)
 
 
@@ -163,6 +187,7 @@ def _create_test_app(
     openai_env_text: str | None = None,
     google_env_text: str | None = None,
     openai_stream_text: str = "ok",
+    openai_response_events: list[object] | None = None,
     google_stream_text: str = "ok",
     image_bytes: bytes = PNG_1X1_BYTES,
 ):
@@ -255,6 +280,7 @@ def _create_test_app(
             seen_image_requests=seen_openai_image_requests,
             stream_text=openai_stream_text,
             image_bytes=image_bytes,
+            response_events=openai_response_events,
             **kwargs,
         )
 

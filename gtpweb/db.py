@@ -38,6 +38,7 @@ def init_db(db_file: Path) -> None:
                 conversation_id INTEGER NOT NULL,
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
                 content TEXT NOT NULL,
+                reasoning TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
@@ -58,5 +59,14 @@ def init_db(db_file: Path) -> None:
             )
             """
         )
+        message_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "reasoning" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''"
+            )
+            logger.info("数据库迁移完成: messages 表已新增 reasoning 字段")
         conn.commit()
     logger.info("数据库初始化完成: 数据库=%s", db_file)

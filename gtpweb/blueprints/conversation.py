@@ -66,12 +66,15 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                           SELECT 1
                           FROM messages m
                           WHERE m.conversation_id = c.id
-                            AND m.content LIKE ?
+                            AND (
+                              m.content LIKE ?
+                              OR m.reasoning LIKE ?
+                            )
                         )
                       )
                     ORDER BY c.updated_at DESC, c.id DESC
                     """,
-                    (username, like_query, like_query),
+                    (username, like_query, like_query, like_query),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -259,7 +262,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
             rows = conn.execute(
                 """
-                SELECT id, role, content, created_at
+                SELECT id, role, content, reasoning, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id ASC
@@ -304,6 +307,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     "id": msg_id,
                     "role": row["role"],
                     "content": row["content"],
+                    "reasoning": row["reasoning"],
                     "created_at": row["created_at"],
                     "attachments": attachment_map.get(msg_id, []),
                 }
@@ -400,7 +404,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
             rows = conn.execute(
                 """
-                SELECT id, role, content, created_at
+                SELECT id, role, content, reasoning, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id ASC
@@ -438,6 +442,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 {
                     "role": row["role"],
                     "content": row["content"],
+                    "reasoning": row["reasoning"],
                     "created_at": row["created_at"],
                     "attachments": attachment_map.get(msg_id, []),
                 }
@@ -463,6 +468,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 role_label = role_map.get(msg["role"], msg["role"])
                 lines.append(f"[{msg['created_at']}] {role_label}:")
                 lines.append(str(msg["content"]))
+                if msg.get("reasoning"):
+                    lines.append("思考摘要:")
+                    lines.append(str(msg["reasoning"]))
                 for att in msg.get("attachments", []):
                     lines.append(
                         f"- Attachment: {att['file_name']} ({att['kind']}, {att['mime_type']})"

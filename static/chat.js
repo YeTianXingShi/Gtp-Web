@@ -307,7 +307,7 @@ function renderMessageAttachments(contentEl, attachments) {
 }
 
 function addMessage(role, content, options = {}) {
-  const { autoScroll = true, attachments = [] } = options;
+  const { autoScroll = true, attachments = [], reasoning = "" } = options;
   const div = document.createElement("div");
   div.className = `message ${role}`;
   const contentEl = document.createElement("div");
@@ -315,6 +315,13 @@ function addMessage(role, content, options = {}) {
   contentEl.innerHTML = renderMarkdown(content);
   renderMessageAttachments(contentEl, attachments);
   div.appendChild(contentEl);
+
+  if (reasoning) {
+    const { panelEl, contentEl: reasoningContentEl } = ensureReasoningPanel(div);
+    panelEl.hidden = false;
+    reasoningContentEl.innerHTML = renderMarkdown(reasoning);
+  }
+
   messagesEl.appendChild(div);
   if (autoScroll) {
     messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -757,7 +764,10 @@ async function loadMessages(conversationId) {
       const displayContent = attachments.length
         ? stripAttachmentMarkerLines(msg.content || "")
         : msg.content || "";
-      addMessage(msg.role, displayContent, { attachments });
+      addMessage(msg.role, displayContent, {
+        attachments,
+        reasoning: msg.reasoning || "",
+      });
     }
   }
   modelSelectEl.value = data.model;

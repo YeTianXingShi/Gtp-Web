@@ -236,6 +236,55 @@ def test_google_action_payload_generates_assistant_image_with_openai_provider(ap
     assert assistant_message["attachments"][0]["preview_url"]
 
 
+def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
+    app = app_builder(
+        openai_env_text=(
+            "OPENAI_BASE_URL=https://example.invalid/v1\n"
+            "OPENAI_API_KEY=test-key\n"
+            "OPENAI_MODELS=gpt-5-mini\n"
+            "OPENAI_IMAGE_MODEL=dall-e-3\n"
+        ),
+        openai_response_events=[
+            {"type": "response.reasoning_summary_text.delta", "delta": "先整理已知条件。"},
+            {"type": "response.reasoning_summary_text.delta", "delta": "再给出结论。"},
+            {"type": "response.output_text.delta", "delta": "这是最终回复。"},
+        ],
+    )
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    create_resp = client.post(
+        "/api/conversations",
+        json={"model": "openai:gpt-5-mini"},
+    )
+    assert create_resp.status_code == 201
+    conv_id = int(create_resp.get_json()["conversation"]["id"])
+
+    stream_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "openai:gpt-5-mini",
+            "content": "请认真思考后回答",
+        },
+        content_type="multipart/form-data",
+    )
+    assert stream_resp.status_code == 200
+    stream_body = stream_resp.get_data(as_text=True)
+    assert '"type": "reasoning"' in stream_body
+    assert '"type": "done"' in stream_body
+
+    list_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert list_resp.status_code == 200
+    messages = list_resp.get_json()["messages"]
+    assistant_message = next(msg for msg in messages if msg["role"] == "assistant")
+
+    assert assistant_message["content"] == "这是最终回复。"
+    assert assistant_message["reasoning"] == "先整理已知条件。再给出结论。"
+
+
 
 def test_google_imagen_model_uses_generate_images(app_builder):
     action_payload = (

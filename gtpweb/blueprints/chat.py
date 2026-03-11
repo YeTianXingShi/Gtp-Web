@@ -111,15 +111,16 @@ def _save_assistant_message(
     db_file: Path,
     conversation_id: int,
     content: str,
+    reasoning: str,
     attachments: list[dict[str, Any]],
 ) -> None:
     with open_db_connection(db_file) as conn:
         cursor = conn.execute(
             """
-            INSERT INTO messages (conversation_id, role, content)
-            VALUES (?, 'assistant', ?)
+            INSERT INTO messages (conversation_id, role, content, reasoning)
+            VALUES (?, 'assistant', ?, ?)
             """,
-            (conversation_id, content),
+            (conversation_id, content, reasoning),
         )
         assistant_message_id = int(cursor.lastrowid)
         if attachments:
@@ -617,16 +618,19 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
 
                 if assistant_text or assistant_attachments:
                     stored_text = assistant_text or "已生成图片，请查看下方结果。"
+                    stored_reasoning = "".join(reasoning_parts).strip()
                     _save_assistant_message(
                         db_file=db_file,
                         conversation_id=conversation_id,
                         content=stored_text,
+                        reasoning=stored_reasoning,
                         attachments=assistant_attachments,
                     )
                     logger.info(
-                        "助手消息落库完成: 会话ID=%s 字符数=%s 附件数=%s",
+                        "助手消息落库完成: 会话ID=%s 字符数=%s 推理摘要字符=%s 附件数=%s",
                         conversation_id,
                         len(stored_text),
+                        len(stored_reasoning),
                         len(assistant_attachments),
                     )
                     if not client_disconnected:

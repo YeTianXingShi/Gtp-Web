@@ -59,6 +59,10 @@ cp config/users.example.json config/users.json
   - `GOOGLE_BASE_URL`: Gemini API 根地址；留空时使用官方默认地址
   - `GOOGLE_API_KEY`: Gemini API Key
   - `GOOGLE_MODELS`: Gemini 模型列表，逗号分隔
+  - `GOOGLE_INCLUDE_THOUGHTS`: 是否返回 thought summaries（`1/0`）
+  - `GOOGLE_THINKING_LEVEL`: Gemini 3 系列优先使用的 thinking 强度，建议 `low/high`（Pro）或 `minimal/low/medium/high`（Flash）
+  - `GOOGLE_THINKING_BUDGET`: Gemini 2.5 系列可选的 thinking token 预算；当前项目仅在模型命中 `gemini-2.5*` 时传递，Gemini 3 系列建议留空
+  - `GOOGLE_THINKING_MODEL_PATTERNS`: 哪些 Gemini 模型启用 thought summaries，逗号分隔，支持 `*` 通配
 - `config/env/storage.env`
   - `CHAT_DB_FILE`: 聊天记录数据库文件路径（默认 `./data/chat.db`）
   - `UPLOAD_DIR`: 附件存储目录（默认 `./data/uploads`）
@@ -82,6 +86,10 @@ cp config/users.example.json config/users.json
 - 已不再读取旧版 `config/env/ai.env` 与 `AI_*` 变量；请统一迁移到 `openai.env` 与 `google.env`。
 - 后台管理页现在会将 OpenAI 与 Google Gemini 分成两个独立配置分组展示。
 - 会话内部保存的是带来源前缀的模型 ID，例如 `openai:gpt-4o-mini`、`google:gemini-2.0-flash`。
+- Gemini thinking 配置建议：
+  - 当前如果主要使用 `gemini-3*`，建议保持 `GOOGLE_THINKING_BUDGET=` 为空，重点调 `GOOGLE_THINKING_LEVEL`。
+  - 如果使用 `gemini-2.5*`，推荐先从 `GOOGLE_THINKING_BUDGET=-1` 开始；想压延迟或成本时可尝试 `1024`，复杂推理可提高到 `4096` 或更高。
+  - `GOOGLE_THINKING_MODEL_PATTERNS` 默认是 `gemini-2.5*,gemini-3*`，只有命中的模型才会开启 thought summaries。
 
 ## 3. 启动
 

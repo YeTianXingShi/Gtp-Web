@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from gtpweb.openai_stream import get_obj_value, to_dict
+from gtpweb.utils import model_name_matches_patterns
 
 PROVIDER_OPENAI = "openai"
 PROVIDER_GOOGLE = "google"
@@ -34,9 +35,8 @@ class ModelGroup:
 _DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.DOTALL)
 
 
-def supports_google_thinking(model_name: str) -> bool:
-    normalized = str(model_name or "").strip().lower()
-    return normalized.startswith("gemini-2.5") or normalized.startswith("gemini-3")
+def supports_google_thinking(model_name: str, model_patterns: Iterable[str]) -> bool:
+    return model_name_matches_patterns(model_name, model_patterns)
 
 
 def build_model_option(provider: str, model_name: str) -> ModelOption:
@@ -183,8 +183,9 @@ def build_google_generate_content_config(
     include_thoughts: bool,
     thinking_level: str,
     thinking_budget: int | None,
+    model_patterns: Iterable[str],
 ) -> Any | None:
-    if (not include_thoughts) or (not supports_google_thinking(model_name)):
+    if (not include_thoughts) or (not supports_google_thinking(model_name, model_patterns)):
         return None
 
     try:

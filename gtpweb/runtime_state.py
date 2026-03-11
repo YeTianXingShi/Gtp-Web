@@ -18,7 +18,7 @@ from gtpweb.config import (
     parse_image_tool_provider,
     parse_models,
 )
-from gtpweb.utils import safe_int
+from gtpweb.utils import parse_model_match_patterns, safe_int
 
 HOT_RELOADABLE_ENV_KEYS = {
     "IMAGE_TOOL_PROVIDER",
@@ -28,6 +28,7 @@ HOT_RELOADABLE_ENV_KEYS = {
     "OPENAI_IMAGE_MODEL",
     "OPENAI_REASONING_EFFORT",
     "OPENAI_REASONING_SUMMARY",
+    "OPENAI_REASONING_MODEL_PATTERNS",
     "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
     "GOOGLE_MODELS",
@@ -35,6 +36,7 @@ HOT_RELOADABLE_ENV_KEYS = {
     "GOOGLE_INCLUDE_THOUGHTS",
     "GOOGLE_THINKING_LEVEL",
     "GOOGLE_THINKING_BUDGET",
+    "GOOGLE_THINKING_MODEL_PATTERNS",
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
@@ -51,6 +53,7 @@ class RuntimeSettings:
     openai_image_model: str
     openai_reasoning_effort: str
     openai_reasoning_summary: str
+    openai_reasoning_model_patterns: list[str]
     google_base_url: str
     google_api_key: str
     google_models: list[str]
@@ -58,6 +61,7 @@ class RuntimeSettings:
     google_include_thoughts: bool
     google_thinking_level: str
     google_thinking_budget: int | None
+    google_thinking_model_patterns: list[str]
     models: list[str]
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
@@ -150,6 +154,11 @@ def build_runtime_settings(
         raw_exts = str(env_values["ALLOWED_ATTACHMENT_EXTS"]).strip()
         return parse_allowed_attachment_exts(raw_exts) if raw_exts else set(fallback)
 
+    def choose_patterns(key: str, fallback: list[str]) -> list[str]:
+        if key not in env_values:
+            return list(fallback)
+        return parse_model_match_patterns(str(env_values[key]), default=fallback)
+
     def choose_openai_image_model(current_models: list[str]) -> str:
         if "OPENAI_IMAGE_MODEL" in env_values:
             return str(env_values["OPENAI_IMAGE_MODEL"]).strip()
@@ -174,6 +183,10 @@ def build_runtime_settings(
         base_config.openai_reasoning_summary,
         allow_empty=True,
     ).lower()
+    openai_reasoning_model_patterns = choose_patterns(
+        "OPENAI_REASONING_MODEL_PATTERNS",
+        base_config.openai_reasoning_model_patterns,
+    )
     google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = choose_models("GOOGLE_MODELS", base_config.google_models)
@@ -194,6 +207,10 @@ def build_runtime_settings(
     google_thinking_budget = choose_optional_int(
         "GOOGLE_THINKING_BUDGET",
         base_config.google_thinking_budget,
+    )
+    google_thinking_model_patterns = choose_patterns(
+        "GOOGLE_THINKING_MODEL_PATTERNS",
+        base_config.google_thinking_model_patterns,
     )
 
     use_openai = bool(openai_models or openai_image_model)
@@ -224,6 +241,7 @@ def build_runtime_settings(
         openai_image_model=openai_image_model,
         openai_reasoning_effort=openai_reasoning_effort,
         openai_reasoning_summary=openai_reasoning_summary,
+        openai_reasoning_model_patterns=openai_reasoning_model_patterns,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
@@ -231,6 +249,7 @@ def build_runtime_settings(
         google_include_thoughts=google_include_thoughts,
         google_thinking_level=google_thinking_level,
         google_thinking_budget=google_thinking_budget,
+        google_thinking_model_patterns=google_thinking_model_patterns,
         models=models,
         model_options=model_options,
         max_upload_mb=max_upload_mb,

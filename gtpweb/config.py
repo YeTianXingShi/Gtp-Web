@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from .ai_providers import PROVIDER_GOOGLE, PROVIDER_OPENAI, ModelOption, build_model_options
 from .attachments import parse_allowed_attachment_exts
 from .user_store import load_user_password_map
-from .utils import safe_int
+from .utils import parse_model_match_patterns, safe_int
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_ENV_DIR = BASE_DIR / "config" / "env"
@@ -18,6 +18,8 @@ DEFAULT_DB_FILE = BASE_DIR / "data" / "chat.db"
 DEFAULT_UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 DEFAULT_LOG_FILE = BASE_DIR / "logs" / "app.log"
 DEFAULT_OPENAI_IMAGE_MODEL = "dall-e-3"
+DEFAULT_OPENAI_REASONING_MODEL_PATTERNS = ("gpt-5*", "o1*", "o3*", "o4*", "computer-use-preview*")
+DEFAULT_GOOGLE_THINKING_MODEL_PATTERNS = ("gemini-2.5*", "gemini-3*")
 
 
 @dataclass(frozen=True)
@@ -39,13 +41,13 @@ ENV_GROUP_SPECS = (
         key="openai",
         filename="openai.env",
         label="OpenAI 配置",
-        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY、OPENAI_MODELS、OPENAI_IMAGE_MODEL 与推理摘要相关配置。",
+        description="维护 OPENAI_BASE_URL、OPENAI_API_KEY、OPENAI_MODELS、OPENAI_IMAGE_MODEL 与推理摘要匹配规则。",
     ),
     EnvGroupSpec(
         key="google",
         filename="google.env",
         label="Google Gemini 配置",
-        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY、GOOGLE_MODELS、GOOGLE_IMAGE_MODEL 与 thinking 配置。",
+        description="维护 GOOGLE_BASE_URL、GOOGLE_API_KEY、GOOGLE_MODELS、GOOGLE_IMAGE_MODEL 与 thinking 匹配规则。",
     ),
     EnvGroupSpec(
         key="storage",
@@ -82,6 +84,7 @@ class AppConfig:
     openai_image_model: str
     openai_reasoning_effort: str
     openai_reasoning_summary: str
+    openai_reasoning_model_patterns: list[str]
     google_base_url: str
     google_api_key: str
     google_models: list[str]
@@ -89,6 +92,7 @@ class AppConfig:
     google_include_thoughts: bool
     google_thinking_level: str
     google_thinking_budget: int | None
+    google_thinking_model_patterns: list[str]
     db_file: Path
     upload_dir: Path
     max_upload_mb: int
@@ -178,6 +182,10 @@ def load_config() -> AppConfig:
         openai_image_model = raw_openai_image_model.strip()
     openai_reasoning_effort = os.getenv("OPENAI_REASONING_EFFORT", "medium").strip().lower()
     openai_reasoning_summary = os.getenv("OPENAI_REASONING_SUMMARY", "auto").strip().lower()
+    openai_reasoning_model_patterns = parse_model_match_patterns(
+        os.getenv("OPENAI_REASONING_MODEL_PATTERNS", ""),
+        default=DEFAULT_OPENAI_REASONING_MODEL_PATTERNS,
+    )
 
     google_base_url = os.getenv("GOOGLE_BASE_URL", "").strip()
     google_api_key = os.getenv("GOOGLE_API_KEY", "")
@@ -186,6 +194,10 @@ def load_config() -> AppConfig:
     google_include_thoughts = parse_bool(os.getenv("GOOGLE_INCLUDE_THOUGHTS", "1"), default=True)
     google_thinking_level = os.getenv("GOOGLE_THINKING_LEVEL", "medium").strip().lower()
     google_thinking_budget = safe_int(os.getenv("GOOGLE_THINKING_BUDGET", ""))
+    google_thinking_model_patterns = parse_model_match_patterns(
+        os.getenv("GOOGLE_THINKING_MODEL_PATTERNS", ""),
+        default=DEFAULT_GOOGLE_THINKING_MODEL_PATTERNS,
+    )
 
     db_file = Path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
     upload_dir = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
@@ -226,6 +238,7 @@ def load_config() -> AppConfig:
         openai_image_model=openai_image_model,
         openai_reasoning_effort=openai_reasoning_effort,
         openai_reasoning_summary=openai_reasoning_summary,
+        openai_reasoning_model_patterns=openai_reasoning_model_patterns,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
@@ -233,6 +246,7 @@ def load_config() -> AppConfig:
         google_include_thoughts=google_include_thoughts,
         google_thinking_level=google_thinking_level,
         google_thinking_budget=google_thinking_budget,
+        google_thinking_model_patterns=google_thinking_model_patterns,
         db_file=db_file,
         upload_dir=upload_dir,
         max_upload_mb=max_upload_mb,

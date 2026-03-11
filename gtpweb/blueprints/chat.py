@@ -58,8 +58,9 @@ def _build_openai_reasoning_config(
     model_name: str,
     reasoning_effort: str,
     reasoning_summary: str,
+    model_patterns: list[str],
 ) -> dict[str, Any] | None:
-    if not supports_openai_reasoning(model_name):
+    if not supports_openai_reasoning(model_name, model_patterns):
         return None
 
     config: dict[str, Any] = {}
@@ -439,6 +440,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                         model_name=upstream_model,
                         reasoning_effort=runtime_settings.openai_reasoning_effort,
                         reasoning_summary=runtime_settings.openai_reasoning_summary,
+                        model_patterns=runtime_settings.openai_reasoning_model_patterns,
                     )
                     if reasoning_config is not None:
                         request_kwargs = {
@@ -516,6 +518,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                         include_thoughts=runtime_settings.google_include_thoughts,
                         thinking_level=runtime_settings.google_thinking_level,
                         thinking_budget=runtime_settings.google_thinking_budget,
+                        model_patterns=runtime_settings.google_thinking_model_patterns,
                     )
                     if google_config is not None:
                         request_kwargs["config"] = google_config

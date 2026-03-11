@@ -2,18 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from openai import APIStatusError
 
-
-_OPENAI_REASONING_MODEL_PREFIXES = (
-    "gpt-5",
-    "o1",
-    "o3",
-    "o4",
-    "computer-use-preview",
-)
+from gtpweb.utils import model_name_matches_patterns
 
 
 def sse_payload(payload: dict[str, Any]) -> str:
@@ -46,7 +39,6 @@ def extract_text_delta(event_obj: Any) -> str:
         delta = get_obj_value(event_obj, "delta")
         return delta if isinstance(delta, str) else ""
 
-    # Fallback for OpenAI-compatible providers returning ChatCompletions style stream chunks.
     event_dict = to_dict(event_obj)
     if not event_dict:
         return ""
@@ -69,9 +61,8 @@ def extract_reasoning_summary_delta(event_obj: Any) -> str:
     return ""
 
 
-def supports_openai_reasoning(model_name: str) -> bool:
-    normalized = str(model_name or "").strip().lower()
-    return any(normalized.startswith(prefix) for prefix in _OPENAI_REASONING_MODEL_PREFIXES)
+def supports_openai_reasoning(model_name: str, model_patterns: Iterable[str]) -> bool:
+    return model_name_matches_patterns(model_name, model_patterns)
 
 
 def _build_response_input_content(content: Any) -> str | list[dict[str, Any]]:

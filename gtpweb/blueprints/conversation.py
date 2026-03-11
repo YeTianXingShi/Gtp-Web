@@ -51,7 +51,7 @@ def _get_exported_at() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _build_download_filename(filename: str) -> str:
+def _build_content_disposition(filename: str, *, disposition: str) -> str:
     normalized = str(filename or "download").strip() or "download"
     path_obj = Path(normalized)
     suffix = re.sub(r"[^A-Za-z0-9.]+", "", path_obj.suffix)
@@ -59,7 +59,7 @@ def _build_download_filename(filename: str) -> str:
     ascii_stem = re.sub(r"[^A-Za-z0-9_-]+", "_", stem).strip("_-") or "download"
     ascii_fallback = f"{ascii_stem}{suffix}" if suffix else ascii_stem
     encoded = quote(normalized, safe="")
-    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
+    return f"{disposition}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _build_export_message(
@@ -117,6 +117,54 @@ def _build_txt_export_body(
                     f"- {attachment['file_name']}（{attachment['kind']}，{attachment['mime_type']}）"
                 )
         lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _build_markdown_export_body(
+    *,
+    conversation: Any,
+    messages: list[dict[str, Any]],
+    exported_at: str,
+) -> str:
+    attachment_count = sum(len(msg.get("attachments", [])) for msg in messages)
+    reasoning_message_count = sum(1 for msg in messages if msg.get("has_reasoning"))
+    lines = [
+        f"# {conversation['title']}",
+        "",
+        "## 元信息",
+        f"- 模型：`{conversation['model']}`",
+        f"- 创建时间：{conversation['created_at']}",
+        f"- 更新时间：{conversation['updated_at']}",
+        f"- 导出时间：{exported_at}",
+        f"- 消息总数：{len(messages)}",
+        f"- 附件总数：{attachment_count}",
+        f"- 含思考摘要消息数：{reasoning_message_count}",
+        "",
+        "## 消息记录",
+        "",
+    ]
+
+    for msg in messages:
+        lines.append(f"### {msg['index']}. {msg['role_label']}（{msg['created_at']}）")
+        lines.append("")
+        lines.append("#### 回复")
+        lines.append("")
+        lines.append(str(msg["content"]) or "（空）")
+        lines.append("")
+        if msg.get("has_reasoning"):
+            lines.append("#### 思考摘要")
+            lines.append("")
+            lines.append(str(msg["reasoning"]))
+            lines.append("")
+        if msg.get("attachments"):
+            lines.append("#### 附件")
+            lines.append("")
+            for attachment in msg["attachments"]:
+                lines.append(
+                    f"- `{attachment['file_name']}` · {attachment['kind']} · `{attachment['mime_type']}`"
+                )
+            lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
@@ -449,13 +497,18 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             return jsonify({"ok": False, "error": "附件文件不存在"}), 404
 
         logger.info("读取附件成功: 用户=%s 附件ID=%s 文件=%s", username, attachment_id, row["file_name"])
-        return send_file(
+        response = send_file(
             file_path,
             mimetype=str(row["mime_type"] or "application/octet-stream"),
             as_attachment=False,
             download_name=str(row["file_name"]),
             conditional=True,
         )
+        response.headers["Content-Disposition"] = _build_content_disposition(
+            str(row["file_name"]),
+            disposition="inline",
+        )
+        return response
 
     @bp.get("/api/conversations/<int:conversation_id>/export")
     def export_conversation(conversation_id: int) -> Response:
@@ -470,7 +523,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             conversation_id,
             export_format,
         )
-        if export_format not in {"json", "txt"}:
+        if export_format == "markdown":
+            export_format = "md"
+        if export_format not in {"json", "txt", "md"}:
             return jsonify({"ok": False, "error": "不支持的导出格式"}), 400
 
         with open_db_connection(db_file) as conn:
@@ -550,7 +605,27 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 body,
                 mimetype="text/plain; charset=utf-8",
                 headers={
-                    "Content-Disposition": _build_download_filename(f"{filename_base}.txt"),
+                    "Content-Disposition": _build_content_disposition(
+                        f"{filename_base}.txt",
+                        disposition="attachment",
+                    ),
+                },
+            )
+
+        if export_format == "md":
+            body = _build_markdown_export_body(
+                conversation=conv,
+                messages=messages,
+                exported_at=exported_at,
+            )
+            return Response(
+                body,
+                mimetype="text/markdown; charset=utf-8",
+                headers={
+                    "Content-Disposition": _build_content_disposition(
+                        f"{filename_base}.md",
+                        disposition="attachment",
+                    ),
                 },
             )
 
@@ -579,7 +654,10 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             body,
             mimetype="application/json; charset=utf-8",
             headers={
-                "Content-Disposition": _build_download_filename(f"{filename_base}.json"),
+                "Content-Disposition": _build_content_disposition(
+                    f"{filename_base}.json",
+                    disposition="attachment",
+                ),
             },
         )
 

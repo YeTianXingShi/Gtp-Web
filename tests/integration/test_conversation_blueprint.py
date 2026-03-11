@@ -99,6 +99,35 @@ def test_export_txt_uses_grouped_reasoning_layout(app_builder):
     assert "先整理已知条件。再给出结论。" in body
 
 
+def test_export_markdown_uses_structured_layout(app_builder):
+    client, conv_id = _create_reasoning_conversation(app_builder)
+
+    export_resp = client.get(f"/api/conversations/{conv_id}/export?format=md")
+    assert export_resp.status_code == 200
+    body = export_resp.get_data(as_text=True)
+
+    assert export_resp.mimetype == "text/markdown"
+    assert "# 请认真思考后回答" in body
+    assert "## 元信息" in body
+    assert "## 消息记录" in body
+    assert "### 2. 助手（" in body
+    assert "#### 回复" in body
+    assert "#### 思考摘要" in body
+    assert "这是最终回复。" in body
+    assert "先整理已知条件。再给出结论。" in body
+
+
+def test_export_markdown_alias_is_supported(app_builder):
+    client, conv_id = _create_reasoning_conversation(app_builder)
+
+    export_resp = client.get(f"/api/conversations/{conv_id}/export?format=markdown")
+    assert export_resp.status_code == 200
+    assert export_resp.mimetype == "text/markdown"
+    disposition = export_resp.headers["Content-Disposition"]
+    assert ".md" in disposition
+    assert "filename*=UTF-8''" in disposition
+
+
 def test_export_uses_ascii_safe_content_disposition_for_unicode_title(logged_in_client):
     conv_id = _create_conversation(logged_in_client)
 

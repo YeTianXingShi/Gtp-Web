@@ -120,6 +120,37 @@ def test_message_image_preview_url_and_order(logged_in_client):
     assert preview_resp.mimetype.startswith("image/")
 
 
+def test_unicode_image_attachment_preview_uses_safe_inline_disposition(logged_in_client):
+    conv_id = _create_conversation(logged_in_client)
+
+    resp = logged_in_client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "openai:gpt-4o-mini",
+            "content": "看中文图片名",
+            "files": [(io.BytesIO(PNG_1X1_BYTES), "中文预览图.png")],
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    _ = resp.get_data(as_text=True)
+
+    list_resp = logged_in_client.get(f"/api/conversations/{conv_id}/messages")
+    assert list_resp.status_code == 200
+    data = list_resp.get_json()
+    user_message = next(msg for msg in data["messages"] if msg["role"] == "user")
+    attachment = user_message["attachments"][0]
+
+    preview_resp = logged_in_client.get(attachment["preview_url"])
+    assert preview_resp.status_code == 200
+    disposition = preview_resp.headers["Content-Disposition"]
+    disposition.encode("latin-1")
+    assert disposition.startswith("inline;")
+    assert "filename*=UTF-8''" in disposition
+    assert ".png" in disposition
+
+
 
 def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
     app = app_builder(

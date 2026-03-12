@@ -1322,10 +1322,6 @@ async function streamReply({
   let shouldStopReading = false;
   let streamAbortReason = "";
 
-  const scrollMessagesToBottom = () => {
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  };
-
   const clearIdleTimer = () => {
     if (idleTimer != null) {
       window.clearTimeout(idleTimer);
@@ -1358,7 +1354,6 @@ async function streamReply({
     if (!streamTextNode || !pendingStreamText) return;
     streamTextNode.appendData(pendingStreamText);
     pendingStreamText = "";
-    scrollMessagesToBottom();
   };
 
   const flushReasoningText = () => {
@@ -1366,7 +1361,6 @@ async function streamReply({
     if (!reasoningTextNode || !pendingReasoningText) return;
     reasoningTextNode.appendData(pendingReasoningText);
     pendingReasoningText = "";
-    scrollMessagesToBottom();
   };
 
   const scheduleStreamTextFlush = () => {
@@ -1417,7 +1411,6 @@ async function streamReply({
     finalizeReasoningRender();
     assistantContentEl.classList.remove("is-streaming");
     assistantContentEl.innerHTML = renderMarkdown(finalReply);
-    scrollMessagesToBottom();
   };
 
   if (assistantContentEl) {

@@ -41,6 +41,7 @@ def init_db(db_file: Path) -> None:
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
                 content TEXT NOT NULL,
                 reasoning TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'complete' CHECK (status IN ('complete', 'incomplete')),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             )
@@ -84,5 +85,10 @@ def init_db(db_file: Path) -> None:
                 "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''"
             )
             logger.info("数据库迁移完成: messages 表已新增 reasoning 字段")
+        if "status" not in message_columns:
+            conn.execute(
+                "ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete'"
+            )
+            logger.info("数据库迁移完成: messages 表已新增 status 字段")
         conn.commit()
     logger.info("数据库初始化完成: 数据库=%s", db_file)

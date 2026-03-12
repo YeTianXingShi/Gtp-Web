@@ -5,7 +5,7 @@ import sqlite3
 from gtpweb.db import init_db, open_db_connection
 
 
-def test_init_db_migrates_messages_reasoning_column(tmp_path):
+def test_init_db_migrates_messages_reasoning_and_status_columns(tmp_path):
     db_file = tmp_path / "chat.db"
 
     with sqlite3.connect(db_file) as conn:
@@ -57,9 +57,11 @@ def test_init_db_migrates_messages_reasoning_column(tmp_path):
             for row in conn.execute("PRAGMA table_info(messages)").fetchall()
         }
         message_row = conn.execute(
-            "SELECT content, reasoning FROM messages ORDER BY id ASC LIMIT 1"
+            "SELECT content, reasoning, status FROM messages ORDER BY id ASC LIMIT 1"
         ).fetchone()
 
     assert "reasoning" in columns
+    assert "status" in columns
     assert message_row["content"] == "旧消息"
     assert message_row["reasoning"] == ""
+    assert message_row["status"] == "complete"

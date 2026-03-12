@@ -326,9 +326,18 @@ function renderMessageAttachments(contentEl, attachments) {
 }
 
 function addMessage(role, content, options = {}) {
-  const { autoScroll = true, attachments = [], reasoning = "" } = options;
+  const {
+    autoScroll = true,
+    attachments = [],
+    reasoning = "",
+    status = "complete",
+    actions = [],
+  } = options;
   const div = document.createElement("div");
   div.className = `message ${role}`;
+  if (status === "incomplete") {
+    div.classList.add("is-incomplete");
+  }
   const contentEl = document.createElement("div");
   contentEl.className = "message-content";
   contentEl.innerHTML = renderMarkdown(content);
@@ -339,6 +348,25 @@ function addMessage(role, content, options = {}) {
     const { panelEl, contentEl: reasoningContentEl } = ensureReasoningPanel(div);
     panelEl.hidden = false;
     reasoningContentEl.innerHTML = renderMarkdown(reasoning);
+  }
+
+  if (Array.isArray(actions) && actions.length) {
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "message-actions";
+    for (const action of actions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = action.className || "message-action-btn";
+      button.textContent = action.label || "操作";
+      if (action.disabled) {
+        button.disabled = true;
+      }
+      button.addEventListener("click", (event) => {
+        action.onClick?.(event, { buttonEl: button, messageEl: div });
+      });
+      actionsEl.appendChild(button);
+    }
+    div.appendChild(actionsEl);
   }
 
   messagesEl.appendChild(div);
@@ -381,6 +409,62 @@ function ensureReasoningPanel(messageEl) {
 function clearMessages() {
   revokeAllTemporaryMessageObjectUrls();
   messagesEl.innerHTML = "";
+}
+
+function clearRetryPrompts() {
+  for (const el of messagesEl.querySelectorAll(".message.system.is-retry-prompt")) {
+    el.remove();
+  }
+}
+
+function setRetryButtonsDisabled(disabled) {
+  for (const button of messagesEl.querySelectorAll(".message-retry-btn")) {
+    button.disabled = disabled;
+  }
+}
+
+function analyzeRetryState(messages) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return { kind: "none" };
+  }
+
+  const last = messages[messages.length - 1];
+  const previous = messages.length > 1 ? messages[messages.length - 2] : null;
+  if (last.role === "assistant") {
+    if (last.status === "complete") {
+      return { kind: "complete" };
+    }
+    if (last.status === "incomplete" && previous?.role === "user") {
+      return {
+        kind: "retry",
+        hasIncompleteAssistant: true,
+      };
+    }
+    return { kind: "unsupported" };
+  }
+
+  if (last.role === "user") {
+    return {
+      kind: "retry",
+      hasIncompleteAssistant: false,
+    };
+  }
+
+  return { kind: "unsupported" };
+}
+
+function resetAssistantMessageForRetry(assistantEl) {
+  if (!assistantEl) return;
+  assistantEl.classList.remove("is-incomplete");
+  const contentEl = assistantEl.querySelector(".message-content");
+  if (contentEl) {
+    contentEl.classList.remove("is-streaming");
+    contentEl.textContent = "";
+  }
+  const attachmentsEl = assistantEl.querySelector(".message-attachments");
+  attachmentsEl?.remove();
+  const reasoningEl = assistantEl.querySelector(".message-reasoning");
+  reasoningEl?.remove();
 }
 
 function formatFileSize(bytes) {
@@ -806,6 +890,7 @@ function updateActionButtons() {
     modelSettingSelectEl.disabled = busy || Boolean(modelSettingFieldEl?.hidden);
   }
   fileInputEl.disabled = busy;
+  setRetryButtonsDisabled(busy);
 
   if (busy || !hasConversation) {
     setExportMenuOpen(false);
@@ -1040,20 +1125,39 @@ async function createConversation() {
   await loadMessages(state.currentConversationId);
 }
 
-async function loadMessages(conversationId) {
-  const data = await fetchJson(`/api/conversations/${conversationId}/messages`);
+async function fetchConversationMessages(conversationId) {
+  return fetchJson(`/api/conversations/${conversationId}/messages`);
+}
+
+function renderConversationMessagesData(conversationId, data) {
   clearMessages();
   if (!data.messages.length) {
     addMessage("system", "开始新的对话吧。");
   } else {
+    let retryAssistantEl = null;
     for (const msg of data.messages) {
       const attachments = Array.isArray(msg.attachments) ? msg.attachments : [];
       const displayContent = attachments.length
         ? stripAttachmentMarkerLines(msg.content || "")
         : msg.content || "";
-      addMessage(msg.role, displayContent, {
+      const messageEl = addMessage(msg.role, displayContent, {
         attachments,
         reasoning: msg.reasoning || "",
+        status: msg.status || "complete",
+      });
+      if (msg.role === "assistant" && msg.status === "incomplete") {
+        retryAssistantEl = messageEl;
+      }
+    }
+
+    const retryState = analyzeRetryState(data.messages);
+    if (retryState.kind === "retry") {
+      addRetryPrompt({
+        conversationId,
+        message: retryState.hasIncompleteAssistant
+          ? "上一条回复未完成，可点击重试。"
+          : "上一条消息尚未收到回复，可点击重试。",
+        assistantEl: retryAssistantEl,
       });
     }
   }
@@ -1068,6 +1172,12 @@ async function loadMessages(conversationId) {
     reasoning_effort: data.reasoning_effort || "",
     thinking_level: data.thinking_level || "",
   });
+}
+
+async function loadMessages(conversationId, preloadedData = null) {
+  const data = preloadedData || (await fetchConversationMessages(conversationId));
+  renderConversationMessagesData(conversationId, data);
+  return data;
 }
 
 async function selectConversation(conversationId) {
@@ -1137,14 +1247,37 @@ function getErrorMessage(err) {
   return String(err);
 }
 
-async function streamReply({
+function addRetryPrompt({ conversationId, message, assistantEl = null }) {
+  clearRetryPrompts();
+  if (assistantEl instanceof HTMLElement && assistantEl.isConnected) {
+    assistantEl.classList.add("is-incomplete");
+  }
+  const retryMessageEl = addMessage("system", message, {
+    actions: [
+      {
+        label: "重试",
+        className: "message-action-btn message-retry-btn",
+        onClick: () => {
+          void retryFailedReply({
+            conversationId,
+            assistantEl,
+            retryMessageEl,
+          });
+        },
+      },
+    ],
+  });
+  retryMessageEl.classList.add("is-retry-prompt");
+  return retryMessageEl;
+}
+
+function buildChatRequestFormData({
   conversationId,
   model,
   reasoningEffort,
   thinkingLevel,
   content,
   files,
-  assistantEl,
 }) {
   const formData = new FormData();
   formData.append("conversation_id", String(conversationId));
@@ -1155,7 +1288,20 @@ async function streamReply({
   for (const file of files) {
     formData.append("files", file);
   }
+  return formData;
+}
 
+function buildRetryRequestFormData(conversationId) {
+  const formData = new FormData();
+  formData.append("conversation_id", String(conversationId));
+  return formData;
+}
+
+async function streamReply({
+  url = "/api/chat/stream",
+  body,
+  assistantEl,
+}) {
   const controller = new AbortController();
   const assistantContentEl = assistantEl.querySelector(".message-content");
   const reasoningPanel = ensureReasoningPanel(assistantEl);
@@ -1285,9 +1431,9 @@ async function streamReply({
 
   let resp;
   try {
-    resp = await fetch("/api/chat/stream", {
+    resp = await fetch(url, {
       method: "POST",
-      body: formData,
+      body,
       signal: controller.signal,
     });
   } catch (err) {
@@ -1382,6 +1528,69 @@ async function streamReply({
     throw buildStreamError(streamError, finalReply);
   }
   return finalReply;
+}
+
+async function retryFailedReply({ conversationId, assistantEl, retryMessageEl }) {
+  if (state.sending) return;
+
+  retryMessageEl?.remove();
+
+  state.sending = true;
+  updateActionButtons();
+
+  let streamSucceeded = false;
+  let targetAssistantEl =
+    assistantEl instanceof HTMLElement && assistantEl.isConnected ? assistantEl : null;
+
+  try {
+    const latestData = await fetchConversationMessages(conversationId);
+    const retryState = analyzeRetryState(latestData.messages);
+
+    if (retryState.kind === "complete") {
+      await loadMessages(conversationId, latestData);
+      streamSucceeded = true;
+    } else if (retryState.kind !== "retry") {
+      throw new Error("当前没有可重试的失败回复。");
+    } else {
+      if (targetAssistantEl) {
+        resetAssistantMessageForRetry(targetAssistantEl);
+      } else {
+        targetAssistantEl = addMessage("assistant", "", { autoScroll: false });
+      }
+
+      await streamReply({
+        url: "/api/chat/retry/stream",
+        body: buildRetryRequestFormData(conversationId),
+        assistantEl: targetAssistantEl,
+      });
+      streamSucceeded = true;
+    }
+  } catch (err) {
+    if (!err || err.keepPartial !== true) {
+      targetAssistantEl?.remove();
+      targetAssistantEl = null;
+    }
+    addRetryPrompt({
+      conversationId,
+      message: `请求失败：${getErrorMessage(err)}`,
+      assistantEl: targetAssistantEl,
+    });
+  } finally {
+    state.sending = false;
+    updateActionButtons();
+    promptEl.focus();
+  }
+
+  if (!streamSucceeded) {
+    return;
+  }
+
+  clearRetryPrompts();
+  try {
+    await loadConversations();
+  } catch (err) {
+    addMessage("system", `刷新会话列表失败：${getErrorMessage(err)}`);
+  }
 }
 
 function getFilenameFromDisposition(headerValue) {
@@ -1517,6 +1726,7 @@ chatForm.addEventListener("submit", async (event) => {
   if (state.currentConversationId == null) {
     await createConversation();
   }
+  clearRetryPrompts();
 
   const model = modelSelectEl.value;
   const modelSettings = getSelectedModelSettings();
@@ -1533,12 +1743,14 @@ chatForm.addEventListener("submit", async (event) => {
   let streamSucceeded = false;
   try {
     await streamReply({
-      conversationId,
-      model,
-      reasoningEffort: modelSettings.reasoning_effort,
-      thinkingLevel: modelSettings.thinking_level,
-      content,
-      files,
+      body: buildChatRequestFormData({
+        conversationId,
+        model,
+        reasoningEffort: modelSettings.reasoning_effort,
+        thinkingLevel: modelSettings.thinking_level,
+        content,
+        files,
+      }),
       assistantEl,
     });
     streamSucceeded = true;
@@ -1546,7 +1758,11 @@ chatForm.addEventListener("submit", async (event) => {
     if (!err || err.keepPartial !== true) {
       assistantEl.remove();
     }
-    addMessage("system", `请求失败：${getErrorMessage(err)}`);
+    addRetryPrompt({
+      conversationId,
+      message: `请求失败：${getErrorMessage(err)}`,
+      assistantEl: err?.keepPartial === true ? assistantEl : null,
+    });
   } finally {
     state.sending = false;
     updateActionButtons();

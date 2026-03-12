@@ -494,7 +494,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
 
             rows = conn.execute(
                 """
-                SELECT id, role, content, reasoning, created_at
+                SELECT id, role, content, reasoning, status, created_at
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY id ASC
@@ -540,6 +540,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                     "role": row["role"],
                     "content": row["content"],
                     "reasoning": row["reasoning"],
+                    "status": row["status"],
                     "created_at": row["created_at"],
                     "attachments": attachment_map.get(msg_id, []),
                 }

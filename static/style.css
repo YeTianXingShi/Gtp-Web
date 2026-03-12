@@ -460,6 +460,20 @@ label span {
   font-size: 14px;
 }
 
+.message-actions {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-action-btn {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
 .message-reasoning {
   margin: 0 0 10px;
   border: 1px solid rgba(149, 193, 255, 0.24);
@@ -681,12 +695,24 @@ label span {
   background: linear-gradient(135deg, rgba(27, 78, 66, 0.86), rgba(35, 124, 96, 0.72));
 }
 
+.message.assistant.is-incomplete {
+  border-style: dashed;
+  border-color: rgba(255, 189, 107, 0.52);
+  background: linear-gradient(135deg, rgba(78, 64, 27, 0.86), rgba(123, 90, 36, 0.72));
+}
+
 .message.system {
   max-width: 100%;
   color: #9cb4d5;
   background: rgba(20, 31, 58, 0.82);
   border: 1px dashed rgba(104, 141, 196, 0.42);
   font-size: 14px;
+}
+
+.message.system.is-retry-prompt {
+  border-color: rgba(255, 185, 89, 0.44);
+  background: rgba(49, 36, 17, 0.82);
+  color: #ffdba5;
 }
 
 .input-row {

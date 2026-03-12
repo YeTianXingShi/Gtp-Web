@@ -115,14 +115,15 @@ def _save_assistant_message(
     content: str,
     reasoning: str,
     attachments: list[dict[str, Any]],
+    status: str,
 ) -> None:
     with open_db_connection(db_file) as conn:
         cursor = conn.execute(
             """
-            INSERT INTO messages (conversation_id, role, content, reasoning)
-            VALUES (?, 'assistant', ?, ?)
+            INSERT INTO messages (conversation_id, role, content, reasoning, status)
+            VALUES (?, 'assistant', ?, ?, ?)
             """,
-            (conversation_id, content, reasoning),
+            (conversation_id, content, reasoning, status),
         )
         assistant_message_id = int(cursor.lastrowid)
         if attachments:
@@ -140,6 +141,351 @@ def _save_assistant_message(
             (conversation_id,),
         )
         conn.commit()
+
+
+def _resolve_stream_target(
+    conn: Any,
+    *,
+    conversation_id: int,
+    username: str,
+    runtime_settings: Any,
+    requested_model: str,
+    reasoning_effort: str,
+    thinking_level: str,
+) -> dict[str, Any]:
+    conv = conn.execute(
+        """
+        SELECT id, title, model, reasoning_effort, thinking_level
+        FROM conversations
+        WHERE id = ? AND username = ?
+        """,
+        (conversation_id, username),
+    ).fetchone()
+    if conv is None:
+        raise LookupError("会话不存在")
+
+    current_model = normalize_model_selection(
+        str(conv["model"]),
+        runtime_settings.model_options,
+        fallback_to_first=True,
+    )
+    resolved_model = requested_model or current_model
+    model_option = resolve_model_option(resolved_model, runtime_settings.model_options)
+    if model_option is None:
+        raise ValueError("无效的模型")
+
+    raw_reasoning_effort = reasoning_effort
+    raw_thinking_level = thinking_level
+    if not raw_reasoning_effort and not raw_thinking_level and model_option.id == current_model:
+        raw_reasoning_effort = str(conv["reasoning_effort"] or "").strip().lower()
+        raw_thinking_level = str(conv["thinking_level"] or "").strip().lower()
+
+    conversation_settings = resolve_conversation_model_settings(
+        model_option,
+        reasoning_effort=raw_reasoning_effort,
+        thinking_level=raw_thinking_level,
+        strict=bool(raw_reasoning_effort or raw_thinking_level),
+    )
+
+    return {
+        "conversation": conv,
+        "conversation_settings": conversation_settings,
+        "selected_model_id": model_option.id,
+        "selected_provider": model_option.provider,
+        "upstream_model": model_option.model_name,
+        "effective_openai_reasoning": build_effective_openai_reasoning_settings(
+            model_option,
+            conversation_settings,
+        ),
+        "effective_google_thinking": build_effective_google_thinking_settings(
+            model_option,
+            conversation_settings,
+        ),
+    }
+
+
+def _load_completion_messages(
+    conn: Any,
+    *,
+    conversation_id: int,
+    max_text_file_chars: int,
+    up_to_message_id: int | None = None,
+) -> list[dict[str, Any]]:
+    query = """
+        SELECT id, role, content
+        FROM messages
+        WHERE conversation_id = ?
+    """
+    params: list[Any] = [conversation_id]
+    if isinstance(up_to_message_id, int):
+        query += " AND id <= ?"
+        params.append(up_to_message_id)
+    query += " ORDER BY id ASC"
+
+    rows = conn.execute(query, tuple(params)).fetchall()
+    completion_messages: list[dict[str, Any]] = []
+    for row in rows:
+        msg_attachments = load_message_attachments(conn, int(row["id"]))
+        msg_content = build_message_content_for_model(
+            role=str(row["role"]),
+            content=str(row["content"]),
+            attachments=msg_attachments,
+            max_text_file_chars=max_text_file_chars,
+        )
+        completion_messages.append({"role": str(row["role"]), "content": msg_content})
+    return completion_messages
+
+
+def _stream_chat_response(
+    *,
+    db_file: Path,
+    upload_dir: Path,
+    username: str,
+    conversation_id: int,
+    completion_messages: list[dict[str, Any]],
+    selected_provider: str,
+    upstream_model: str,
+    effective_openai_reasoning: Any,
+    effective_google_thinking: Any,
+    runtime_settings: Any,
+    openai_client: Any,
+    google_client: Any,
+) -> Response:
+    def generate() -> Any:
+        assistant_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        has_error = False
+        client_disconnected = False
+        upstream_finished = False
+        delta_count = 0
+        started_at = time.perf_counter()
+        logger.info(
+            "开始调用上游模型: 会话ID=%s 来源=%s 模型=%s 上下文消息数=%s",
+            conversation_id,
+            selected_provider,
+            upstream_model,
+            len(completion_messages),
+        )
+
+        try:
+            if selected_provider == PROVIDER_OPENAI:
+                if openai_client is None:
+                    raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
+                reasoning_config = _build_openai_reasoning_config(
+                    reasoning_settings=effective_openai_reasoning,
+                )
+                if reasoning_config is not None:
+                    request_kwargs = {
+                        "model": upstream_model,
+                        "input": build_openai_response_input(completion_messages),
+                        "reasoning": reasoning_config,
+                        "stream": True,
+                    }
+                    stream = openai_client.responses.create(**request_kwargs)
+                    for event_obj in stream:
+                        reasoning_delta = extract_reasoning_summary_delta(event_obj)
+                        if reasoning_delta:
+                            reasoning_parts.append(reasoning_delta)
+                            yield sse_payload({"type": "reasoning", "text": reasoning_delta})
+
+                        delta = extract_text_delta(event_obj)
+                        if delta:
+                            assistant_parts.append(delta)
+                            delta_count += 1
+                            if delta_count % 20 == 0:
+                                logger.debug(
+                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                    conversation_id,
+                                    delta_count,
+                                    len("".join(assistant_parts)),
+                                )
+                            yield sse_payload({"type": "delta", "text": delta})
+
+                    if not assistant_parts and not has_error:
+                        has_error = True
+                        yield sse_payload(
+                            {
+                                "type": "error",
+                                "error": "请求上游成功但未收到流式文本，请确认网关支持 Responses API 流式。",
+                            }
+                        )
+                else:
+                    request_kwargs = {
+                        "model": upstream_model,
+                        "messages": completion_messages,
+                        "stream": True,
+                    }
+                    stream = openai_client.chat.completions.create(**request_kwargs)
+                    for event_obj in stream:
+                        delta = extract_text_delta(event_obj)
+                        if delta:
+                            assistant_parts.append(delta)
+                            delta_count += 1
+                            if delta_count % 20 == 0:
+                                logger.debug(
+                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                    conversation_id,
+                                    delta_count,
+                                    len("".join(assistant_parts)),
+                                )
+                            yield sse_payload({"type": "delta", "text": delta})
+
+                    if not assistant_parts and not has_error:
+                        has_error = True
+                        yield sse_payload(
+                            {
+                                "type": "error",
+                                "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
+                            }
+                        )
+            elif selected_provider == PROVIDER_GOOGLE:
+                if google_client is None:
+                    raise RuntimeError("Google Gemini 客户端未初始化，请检查 GOOGLE 配置。")
+                request_kwargs = {
+                    "model": upstream_model,
+                    "contents": build_google_contents(completion_messages),
+                }
+                google_config = build_google_generate_content_config(
+                    thinking_settings=effective_google_thinking,
+                )
+                if google_config is not None:
+                    request_kwargs["config"] = google_config
+                stream = google_client.models.generate_content_stream(**request_kwargs)
+                for event_obj in stream:
+                    reasoning_delta = extract_google_reasoning_delta(event_obj)
+                    if reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        yield sse_payload({"type": "reasoning", "text": reasoning_delta})
+
+                    delta = extract_google_text_delta(event_obj)
+                    if delta:
+                        assistant_parts.append(delta)
+                        delta_count += 1
+                        if delta_count % 20 == 0:
+                            logger.debug(
+                                "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                conversation_id,
+                                delta_count,
+                                len("".join(assistant_parts)),
+                            )
+                        yield sse_payload({"type": "delta", "text": delta})
+
+                if not assistant_parts and not has_error:
+                    has_error = True
+                    yield sse_payload(
+                        {
+                            "type": "error",
+                            "error": "请求 Gemini 成功但未收到流式文本，请确认模型支持流式输出。",
+                        }
+                    )
+            else:
+                raise RuntimeError(f"不支持的模型来源: {selected_provider}")
+
+            logger.info(
+                "上游模型调用完成: 会话ID=%s 来源=%s 分片数=%s 输出字符=%s 推理摘要字符=%s 耗时毫秒=%.2f",
+                conversation_id,
+                selected_provider,
+                delta_count,
+                len("".join(assistant_parts)),
+                len("".join(reasoning_parts)),
+                (time.perf_counter() - started_at) * 1000,
+            )
+            upstream_finished = True
+
+        except APIStatusError as exc:
+            has_error = True
+            status_code, message = extract_status_error_message(exc)
+            status = status_code if status_code is not None else "unknown"
+            logger.warning(
+                "上游接口错误: 会话ID=%s 状态=%s 信息=%s",
+                conversation_id,
+                status,
+                message,
+            )
+            yield sse_payload(
+                {
+                    "type": "error",
+                    "error": f"{runtime_settings.openai_base_url} ({status}): {message}",
+                }
+            )
+        except GeneratorExit:
+            client_disconnected = True
+            logger.info("聊天流连接已断开: 会话ID=%s（客户端可能已关闭连接）", conversation_id)
+            raise
+        except OpenAIError as exc:
+            has_error = True
+            logger.exception("OpenAI SDK 调用异常: 会话ID=%s", conversation_id)
+            yield sse_payload({"type": "error", "error": f"OpenAI SDK 调用失败: {exc}"})
+        except Exception as exc:
+            has_error = True
+            if selected_provider == PROVIDER_GOOGLE:
+                logger.exception("Google Gemini SDK 调用异常: 会话ID=%s", conversation_id)
+                yield sse_payload({"type": "error", "error": f"Google Gemini 调用失败: {exc}"})
+            else:
+                logger.exception("聊天流内部异常: 会话ID=%s", conversation_id)
+                yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
+        finally:
+            assistant_text = "".join(assistant_parts).strip()
+            assistant_attachments: list[dict[str, Any]] = []
+            if assistant_text:
+                assistant_action = parse_assistant_action(assistant_text)
+                if assistant_action is not None:
+                    action_result = execute_assistant_action(
+                        assistant_action,
+                        image_tool_provider=runtime_settings.image_tool_provider,
+                        openai_image_model=runtime_settings.openai_image_model,
+                        google_image_model=runtime_settings.google_image_model,
+                        openai_client=openai_client,
+                        google_client=google_client,
+                        conversation_id=conversation_id,
+                        upload_dir=upload_dir,
+                        safe_username=safe_filename(username),
+                    )
+                    assistant_text = action_result.message_text.strip()
+                    assistant_attachments = list(action_result.attachments)
+
+            if assistant_text or assistant_attachments:
+                stored_text = assistant_text or "已生成图片，请查看下方结果。"
+                stored_reasoning = "".join(reasoning_parts).strip()
+                stored_status = "complete" if upstream_finished and not has_error else "incomplete"
+                _save_assistant_message(
+                    db_file=db_file,
+                    conversation_id=conversation_id,
+                    content=stored_text,
+                    reasoning=stored_reasoning,
+                    attachments=assistant_attachments,
+                    status=stored_status,
+                )
+                logger.info(
+                    "助手消息落库完成: 会话ID=%s 状态=%s 字符数=%s 推理摘要字符=%s 附件数=%s",
+                    conversation_id,
+                    stored_status,
+                    len(stored_text),
+                    len(stored_reasoning),
+                    len(assistant_attachments),
+                )
+                if not client_disconnected:
+                    yield sse_payload({"type": "done", "reply": stored_text})
+            else:
+                if (not has_error) and (not client_disconnected):
+                    yield sse_payload({"type": "error", "error": "AI 服务返回空结果"})
+                logger.warning(
+                    "助手消息为空: 会话ID=%s 是否已有错误=%s",
+                    conversation_id,
+                    has_error,
+                )
+                if not client_disconnected:
+                    yield sse_payload({"type": "done", "reply": ""})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 def create_chat_blueprint(config: AppConfig) -> Blueprint:
@@ -221,12 +567,6 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 ),
                 400,
             )
-
-        selected_model_id = ""
-        selected_provider = ""
-        upstream_model = ""
-        effective_openai_reasoning = None
-        effective_google_thinking = None
 
         prepared_attachments: list[dict[str, Any]] = []
         for file in uploaded_files:
@@ -319,54 +659,28 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
 
         file_names_for_display = [str(item["file_name"]) for item in prepared_attachments]
         display_content = build_user_display_content(content, file_names_for_display) or "附件消息"
-        completion_messages: list[dict[str, Any]] = []
         with open_db_connection(db_file) as conn:
-            conv = conn.execute(
-                """
-                SELECT id, title, model, reasoning_effort, thinking_level
-                FROM conversations
-                WHERE id = ? AND username = ?
-                """,
-                (conversation_id, username),
-            ).fetchone()
-            if conv is None:
-                return jsonify({"ok": False, "error": "会话不存在"}), 404
-
-            current_model = normalize_model_selection(
-                str(conv["model"]),
-                runtime_settings.model_options,
-                fallback_to_first=True,
-            )
-            requested_model = model or current_model
-            model_option = resolve_model_option(requested_model, runtime_settings.model_options)
-            if model_option is None:
-                return jsonify({"ok": False, "error": "无效的模型"}), 400
-
-            raw_reasoning_effort = reasoning_effort
-            raw_thinking_level = thinking_level
-            if not raw_reasoning_effort and not raw_thinking_level and model_option.id == current_model:
-                raw_reasoning_effort = str(conv["reasoning_effort"] or "").strip().lower()
-                raw_thinking_level = str(conv["thinking_level"] or "").strip().lower()
             try:
-                conversation_settings = resolve_conversation_model_settings(
-                    model_option,
-                    reasoning_effort=raw_reasoning_effort,
-                    thinking_level=raw_thinking_level,
-                    strict=bool(raw_reasoning_effort or raw_thinking_level),
+                stream_target = _resolve_stream_target(
+                    conn,
+                    conversation_id=conversation_id,
+                    username=username,
+                    runtime_settings=runtime_settings,
+                    requested_model=model,
+                    reasoning_effort=reasoning_effort,
+                    thinking_level=thinking_level,
                 )
+            except LookupError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 404
             except ValueError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 400
 
-            selected_model_id = model_option.id
-            selected_provider = model_option.provider
-            upstream_model = model_option.model_name
-            effective_openai_reasoning = build_effective_openai_reasoning_settings(
-                model_option,
-                conversation_settings,
-            )
-            effective_google_thinking = build_effective_google_thinking_settings(
-                model_option,
-                conversation_settings,
+            conv = stream_target["conversation"]
+            conversation_settings = stream_target["conversation_settings"]
+            completion_messages = _load_completion_messages(
+                conn,
+                conversation_id=conversation_id,
+                max_text_file_chars=max_text_file_chars,
             )
 
             count_row = conn.execute(
@@ -374,35 +688,17 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 (conversation_id,),
             ).fetchone()
             existing_count = count_row["total"] if count_row else 0
-            history_rows = conn.execute(
-                """
-                SELECT id, role, content
-                FROM messages
-                WHERE conversation_id = ?
-                ORDER BY id ASC
-                """,
-                (conversation_id,),
-            ).fetchall()
-            for row in history_rows:
-                msg_attachments = load_message_attachments(conn, int(row["id"]))
-                msg_content = build_message_content_for_model(
-                    role=str(row["role"]),
-                    content=str(row["content"]),
-                    attachments=msg_attachments,
-                    max_text_file_chars=max_text_file_chars,
-                )
-                completion_messages.append({"role": str(row["role"]), "content": msg_content})
             logger.info(
                 "历史消息加载完成: 会话ID=%s 历史消息数=%s 本次附件数=%s",
                 conversation_id,
-                len(history_rows),
+                len(completion_messages),
                 len(prepared_attachments),
             )
 
             cursor = conn.execute(
                 """
-                INSERT INTO messages (conversation_id, role, content)
-                VALUES (?, 'user', ?)
+                INSERT INTO messages (conversation_id, role, content, status)
+                VALUES (?, 'user', ?, 'complete')
                 """,
                 (conversation_id, display_content),
             )
@@ -457,7 +753,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 """,
                 (
                     updated_title,
-                    selected_model_id,
+                    stream_target["selected_model_id"],
                     conversation_settings.reasoning_effort,
                     conversation_settings.thinking_level,
                     conversation_id,
@@ -470,235 +766,142 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 user_message_id,
             )
 
-        def generate() -> Any:
-            assistant_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            has_error = False
-            client_disconnected = False
-            delta_count = 0
-            started_at = time.perf_counter()
+        return _stream_chat_response(
+            db_file=db_file,
+            upload_dir=upload_dir,
+            username=username,
+            conversation_id=conversation_id,
+            completion_messages=completion_messages,
+            selected_provider=stream_target["selected_provider"],
+            upstream_model=stream_target["upstream_model"],
+            effective_openai_reasoning=stream_target["effective_openai_reasoning"],
+            effective_google_thinking=stream_target["effective_google_thinking"],
+            runtime_settings=runtime_settings,
+            openai_client=openai_client,
+            google_client=google_client,
+        )
+
+    @bp.post("/api/chat/retry/stream")
+    def retry_chat_stream() -> Response:
+        username = _get_current_user(users_file)
+        if not username:
+            return jsonify({"ok": False, "error": "请先登录"}), 401
+
+        content_type = request.content_type or ""
+        conversation_id: int | None
+        if content_type.startswith("multipart/form-data"):
+            conversation_id = safe_int(request.form.get("conversation_id"))
+        else:
+            payload = request.get_json(silent=True) or {}
+            conversation_id = payload.get("conversation_id")
+            if not isinstance(conversation_id, int):
+                conversation_id = safe_int(conversation_id)
+
+        if not isinstance(conversation_id, int):
+            return jsonify({"ok": False, "error": "conversation_id 无效"}), 400
+
+        runtime_state = get_runtime_state()
+        runtime_settings = runtime_state.settings
+        openai_client = runtime_state.openai_client
+        google_client = runtime_state.google_client
+        max_text_file_chars = runtime_settings.max_text_file_chars
+        logger.info("聊天重试请求: 用户=%s 会话ID=%s", username, conversation_id)
+
+        with open_db_connection(db_file) as conn:
+            try:
+                stream_target = _resolve_stream_target(
+                    conn,
+                    conversation_id=conversation_id,
+                    username=username,
+                    runtime_settings=runtime_settings,
+                    requested_model="",
+                    reasoning_effort="",
+                    thinking_level="",
+                )
+            except LookupError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 404
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+
+            tail_rows = conn.execute(
+                """
+                SELECT id, role, status
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY id DESC
+                LIMIT 2
+                """,
+                (conversation_id,),
+            ).fetchall()
+            if not tail_rows:
+                return jsonify({"ok": False, "error": "当前会话没有可重试的消息"}), 400
+
+            last_row = tail_rows[0]
+            retry_user_message_id: int | None = None
+            stale_assistant_message_id: int | None = None
+            last_role = str(last_row["role"])
+            last_status = str(last_row["status"] or "complete")
+
+            if last_role == "user":
+                retry_user_message_id = int(last_row["id"])
+            elif last_role == "assistant" and last_status == "incomplete":
+                if len(tail_rows) < 2 or str(tail_rows[1]["role"]) != "user":
+                    return jsonify({"ok": False, "error": "最后一条消息状态异常，无法重试"}), 400
+                stale_assistant_message_id = int(last_row["id"])
+                retry_user_message_id = int(tail_rows[1]["id"])
+            else:
+                return jsonify({"ok": False, "error": "当前没有可重试的失败回复"}), 400
+
+            completion_messages = _load_completion_messages(
+                conn,
+                conversation_id=conversation_id,
+                max_text_file_chars=max_text_file_chars,
+                up_to_message_id=retry_user_message_id,
+            )
             logger.info(
-                "开始调用上游模型: 会话ID=%s 来源=%s 模型=%s 上下文消息数=%s",
+                "重试历史消息加载完成: 会话ID=%s 上下文消息数=%s",
                 conversation_id,
-                selected_provider,
-                upstream_model,
                 len(completion_messages),
             )
 
-            try:
-                if selected_provider == PROVIDER_OPENAI:
-                    if openai_client is None:
-                        raise RuntimeError("OpenAI 客户端未初始化，请检查 OPENAI 配置。")
-                    reasoning_config = _build_openai_reasoning_config(
-                        reasoning_settings=effective_openai_reasoning,
-                    )
-                    if reasoning_config is not None:
-                        request_kwargs = {
-                            "model": upstream_model,
-                            "input": build_openai_response_input(completion_messages),
-                            "reasoning": reasoning_config,
-                            "stream": True,
-                        }
-                        stream = openai_client.responses.create(**request_kwargs)
-                        for event_obj in stream:
-                            reasoning_delta = extract_reasoning_summary_delta(event_obj)
-                            if reasoning_delta:
-                                reasoning_parts.append(reasoning_delta)
-                                yield sse_payload({"type": "reasoning", "text": reasoning_delta})
-
-                            delta = extract_text_delta(event_obj)
-                            if delta:
-                                assistant_parts.append(delta)
-                                delta_count += 1
-                                if delta_count % 20 == 0:
-                                    logger.debug(
-                                        "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                        conversation_id,
-                                        delta_count,
-                                        len("".join(assistant_parts)),
-                                    )
-                                yield sse_payload({"type": "delta", "text": delta})
-
-                        if not assistant_parts and not has_error:
-                            has_error = True
-                            yield sse_payload(
-                                {
-                                    "type": "error",
-                                    "error": "请求上游成功但未收到流式文本，请确认网关支持 Responses API 流式。",
-                                }
-                            )
-                    else:
-                        request_kwargs = {
-                            "model": upstream_model,
-                            "messages": completion_messages,
-                            "stream": True,
-                        }
-                        stream = openai_client.chat.completions.create(**request_kwargs)
-                        for event_obj in stream:
-                            delta = extract_text_delta(event_obj)
-                            if delta:
-                                assistant_parts.append(delta)
-                                delta_count += 1
-                                if delta_count % 20 == 0:
-                                    logger.debug(
-                                        "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                        conversation_id,
-                                        delta_count,
-                                        len("".join(assistant_parts)),
-                                    )
-                                yield sse_payload({"type": "delta", "text": delta})
-
-                        if not assistant_parts and not has_error:
-                            has_error = True
-                            yield sse_payload(
-                                {
-                                    "type": "error",
-                                    "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
-                                }
-                            )
-                elif selected_provider == PROVIDER_GOOGLE:
-                    if google_client is None:
-                        raise RuntimeError("Google Gemini 客户端未初始化，请检查 GOOGLE 配置。")
-                    request_kwargs = {
-                        "model": upstream_model,
-                        "contents": build_google_contents(completion_messages),
-                    }
-                    google_config = build_google_generate_content_config(
-                        thinking_settings=effective_google_thinking,
-                    )
-                    if google_config is not None:
-                        request_kwargs["config"] = google_config
-                    stream = google_client.models.generate_content_stream(**request_kwargs)
-                    for event_obj in stream:
-                        reasoning_delta = extract_google_reasoning_delta(event_obj)
-                        if reasoning_delta:
-                            reasoning_parts.append(reasoning_delta)
-                            yield sse_payload({"type": "reasoning", "text": reasoning_delta})
-
-                        delta = extract_google_text_delta(event_obj)
-                        if delta:
-                            assistant_parts.append(delta)
-                            delta_count += 1
-                            if delta_count % 20 == 0:
-                                logger.debug(
-                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                    conversation_id,
-                                    delta_count,
-                                    len("".join(assistant_parts)),
-                                )
-                            yield sse_payload({"type": "delta", "text": delta})
-
-                    if not assistant_parts and not has_error:
-                        has_error = True
-                        yield sse_payload(
-                            {
-                                "type": "error",
-                                "error": "请求 Gemini 成功但未收到流式文本，请确认模型支持流式输出。",
-                            }
-                        )
-                else:
-                    raise RuntimeError(f"不支持的模型来源: {selected_provider}")
-
+            if stale_assistant_message_id is not None:
+                conn.execute(
+                    "DELETE FROM message_attachments WHERE message_id = ?",
+                    (stale_assistant_message_id,),
+                )
+                conn.execute(
+                    "DELETE FROM messages WHERE id = ?",
+                    (stale_assistant_message_id,),
+                )
                 logger.info(
-                    "上游模型调用完成: 会话ID=%s 来源=%s 分片数=%s 输出字符=%s 推理摘要字符=%s 耗时毫秒=%.2f",
+                    "已清理未完成助手消息: 会话ID=%s 助手消息ID=%s",
                     conversation_id,
-                    selected_provider,
-                    delta_count,
-                    len("".join(assistant_parts)),
-                    len("".join(reasoning_parts)),
-                    (time.perf_counter() - started_at) * 1000,
+                    stale_assistant_message_id,
                 )
 
-            except APIStatusError as exc:
-                has_error = True
-                status_code, message = extract_status_error_message(exc)
-                status = status_code if status_code is not None else "unknown"
-                logger.warning(
-                    "上游接口错误: 会话ID=%s 状态=%s 信息=%s",
-                    conversation_id,
-                    status,
-                    message,
-                )
-                yield sse_payload(
-                    {
-                        "type": "error",
-                        "error": f"{runtime_settings.openai_base_url} ({status}): {message}",
-                    }
-                )
-            except GeneratorExit:
-                client_disconnected = True
-                logger.info("聊天流连接已断开: 会话ID=%s（客户端可能已关闭连接）", conversation_id)
-                raise
-            except OpenAIError as exc:
-                has_error = True
-                logger.exception("OpenAI SDK 调用异常: 会话ID=%s", conversation_id)
-                yield sse_payload({"type": "error", "error": f"OpenAI SDK 调用失败: {exc}"})
-            except Exception as exc:
-                has_error = True
-                if selected_provider == PROVIDER_GOOGLE:
-                    logger.exception("Google Gemini SDK 调用异常: 会话ID=%s", conversation_id)
-                    yield sse_payload({"type": "error", "error": f"Google Gemini 调用失败: {exc}"})
-                else:
-                    logger.exception("聊天流内部异常: 会话ID=%s", conversation_id)
-                    yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
-            finally:
-                assistant_text = "".join(assistant_parts).strip()
-                assistant_attachments: list[dict[str, Any]] = []
-                if assistant_text:
-                    assistant_action = parse_assistant_action(assistant_text)
-                    if assistant_action is not None:
-                        action_result = execute_assistant_action(
-                            assistant_action,
-                            image_tool_provider=runtime_settings.image_tool_provider,
-                            openai_image_model=runtime_settings.openai_image_model,
-                            google_image_model=runtime_settings.google_image_model,
-                            openai_client=openai_client,
-                            google_client=google_client,
-                            conversation_id=conversation_id,
-                            upload_dir=upload_dir,
-                            safe_username=safe_filename(username),
-                        )
-                        assistant_text = action_result.message_text.strip()
-                        assistant_attachments = list(action_result.attachments)
+            conn.execute(
+                """
+                UPDATE conversations
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (conversation_id,),
+            )
+            conn.commit()
 
-                if assistant_text or assistant_attachments:
-                    stored_text = assistant_text or "已生成图片，请查看下方结果。"
-                    stored_reasoning = "".join(reasoning_parts).strip()
-                    _save_assistant_message(
-                        db_file=db_file,
-                        conversation_id=conversation_id,
-                        content=stored_text,
-                        reasoning=stored_reasoning,
-                        attachments=assistant_attachments,
-                    )
-                    logger.info(
-                        "助手消息落库完成: 会话ID=%s 字符数=%s 推理摘要字符=%s 附件数=%s",
-                        conversation_id,
-                        len(stored_text),
-                        len(stored_reasoning),
-                        len(assistant_attachments),
-                    )
-                    if not client_disconnected:
-                        yield sse_payload({"type": "done", "reply": stored_text})
-                else:
-                    if (not has_error) and (not client_disconnected):
-                        yield sse_payload({"type": "error", "error": "AI 服务返回空结果"})
-                    logger.warning(
-                        "助手消息为空: 会话ID=%s 是否已有错误=%s",
-                        conversation_id,
-                        has_error,
-                    )
-                    if not client_disconnected:
-                        yield sse_payload({"type": "done", "reply": ""})
-
-        return Response(
-            stream_with_context(generate()),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-                "Connection": "keep-alive",
-            },
+        return _stream_chat_response(
+            db_file=db_file,
+            upload_dir=upload_dir,
+            username=username,
+            conversation_id=conversation_id,
+            completion_messages=completion_messages,
+            selected_provider=stream_target["selected_provider"],
+            upstream_model=stream_target["upstream_model"],
+            effective_openai_reasoning=stream_target["effective_openai_reasoning"],
+            effective_google_thinking=stream_target["effective_google_thinking"],
+            runtime_settings=runtime_settings,
+            openai_client=openai_client,
+            google_client=google_client,
         )
 
     return bp

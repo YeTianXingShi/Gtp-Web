@@ -12,6 +12,40 @@ PNG_1X1_BYTES = (
 
 
 
+class _OpenAITextStream:
+    def __init__(self, *chunks: str):
+        self._chunks = list(chunks)
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            yield {"choices": [{"delta": {"content": chunk}}]}
+
+
+class _OpenAITextStreamWithError:
+    def __init__(self, chunks: list[str], error_message: str):
+        self._chunks = list(chunks)
+        self._error_message = error_message
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            yield {"choices": [{"delta": {"content": chunk}}]}
+        raise RuntimeError(self._error_message)
+
+
+def _install_openai_streams(app, streams: list[object]) -> None:
+    runtime_state = app.extensions["runtime_state"]
+    seen_requests = app.extensions["seen_openai_requests"]
+    queue = list(streams)
+
+    def _create(**kwargs):
+        seen_requests.append(kwargs)
+        if not queue:
+            raise AssertionError("未配置足够的 OpenAI 流返回")
+        return queue.pop(0)
+
+    runtime_state.openai_client.chat.completions.create = _create
+
+
 def _create_conversation(client) -> int:
     resp = client.post("/api/conversations", json={"model": "openai:gpt-4o-mini"})
     assert resp.status_code == 201
@@ -672,3 +706,115 @@ def test_empty_image_model_disables_text2im_capability(app_builder):
     assert app.extensions["seen_openai_image_requests"] == []
     assert app.extensions["seen_google_image_requests"] == []
     assert app.extensions["seen_google_content_image_requests"] == []
+
+
+def test_retry_chat_stream_reuses_last_user_message_after_empty_failure(app_builder):
+    app = app_builder()
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    conv_id = _create_conversation(client)
+    _install_openai_streams(
+        app,
+        [
+            _OpenAITextStreamWithError([], "上游临时不可用"),
+            _OpenAITextStream("重试后拿到完整回复。"),
+        ],
+    )
+
+    first_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "openai:gpt-4o-mini",
+            "content": "第一次先失败",
+        },
+        content_type="multipart/form-data",
+    )
+    assert first_resp.status_code == 200
+    first_body = first_resp.get_data(as_text=True)
+    assert '"type": "error"' in first_body
+    assert "上游临时不可用" in first_body
+
+    messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert messages_resp.status_code == 200
+    messages = messages_resp.get_json()["messages"]
+    assert [msg["role"] for msg in messages] == ["user"]
+    assert messages[0]["status"] == "complete"
+
+    retry_resp = client.post(
+        "/api/chat/retry/stream",
+        data={"conversation_id": str(conv_id)},
+        content_type="multipart/form-data",
+    )
+    assert retry_resp.status_code == 200
+    retry_body = retry_resp.get_data(as_text=True)
+    assert '"type": "delta"' in retry_body
+    assert '"type": "done"' in retry_body
+    assert "重试后拿到完整回复。" in retry_body
+
+    final_messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert final_messages_resp.status_code == 200
+    final_messages = final_messages_resp.get_json()["messages"]
+    assert [msg["role"] for msg in final_messages] == ["user", "assistant"]
+    assert final_messages[1]["content"] == "重试后拿到完整回复。"
+    assert final_messages[1]["status"] == "complete"
+    assert len(app.extensions["seen_openai_requests"]) == 2
+
+
+def test_retry_chat_stream_replaces_incomplete_assistant_message(app_builder):
+    app = app_builder()
+    client = app.test_client()
+
+    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    assert login_resp.status_code == 200
+
+    conv_id = _create_conversation(client)
+    _install_openai_streams(
+        app,
+        [
+            _OpenAITextStreamWithError(["先返回一半"], "上游临时不可用"),
+            _OpenAITextStream("重试后的完整回复。"),
+        ],
+    )
+
+    first_resp = client.post(
+        "/api/chat/stream",
+        data={
+            "conversation_id": str(conv_id),
+            "model": "openai:gpt-4o-mini",
+            "content": "给我一个会失败的回答",
+        },
+        content_type="multipart/form-data",
+    )
+    assert first_resp.status_code == 200
+    first_body = first_resp.get_data(as_text=True)
+    assert '"type": "error"' in first_body
+    assert "先返回一半" in first_body
+
+    messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert messages_resp.status_code == 200
+    messages = messages_resp.get_json()["messages"]
+    assert [msg["role"] for msg in messages] == ["user", "assistant"]
+    assert messages[1]["content"] == "先返回一半"
+    assert messages[1]["status"] == "incomplete"
+
+    retry_resp = client.post(
+        "/api/chat/retry/stream",
+        data={"conversation_id": str(conv_id)},
+        content_type="multipart/form-data",
+    )
+    assert retry_resp.status_code == 200
+    retry_body = retry_resp.get_data(as_text=True)
+    assert '"type": "delta"' in retry_body
+    assert "重试后的完整回复。" in retry_body
+
+    final_messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
+    assert final_messages_resp.status_code == 200
+    final_messages = final_messages_resp.get_json()["messages"]
+    assert [msg["role"] for msg in final_messages] == ["user", "assistant"]
+    assert final_messages[1]["content"] == "重试后的完整回复。"
+    assert final_messages[1]["status"] == "complete"
+    assert len(app.extensions["seen_openai_requests"]) == 2

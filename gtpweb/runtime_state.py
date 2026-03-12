@@ -1,3 +1,12 @@
+"""
+运行时状态管理模块
+
+负责管理应用的运行时状态和热更新配置，包括：
+- 运行时设置管理
+- AI 客户端初始化
+- 环境变量热更新
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,6 +23,7 @@ from gtpweb.attachments import parse_allowed_attachment_exts
 from gtpweb.config import AppConfig, load_model_catalog, parse_bool, parse_image_tool_provider
 from gtpweb.utils import safe_int
 
+# 可热更新的环境变量键
 HOT_RELOADABLE_ENV_KEYS = {
     "IMAGE_TOOL_PROVIDER",
     "OPENAI_BASE_URL",

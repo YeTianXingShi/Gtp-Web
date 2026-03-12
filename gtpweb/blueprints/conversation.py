@@ -1,3 +1,13 @@
+"""
+对话管理蓝图模块
+
+本模块处理对话相关的路由和功能，包括：
+- 对话列表和详情
+- 对话创建、更新、删除
+- 对话导出（JSON、Markdown、TXT）
+- 消息历史查询
+"""
+
 from __future__ import annotations
 
 import json

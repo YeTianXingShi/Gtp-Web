@@ -1,3 +1,14 @@
+"""
+聊天蓝图模块
+
+本模块处理聊天相关的路由和功能，包括：
+- 聊天消息发送和流式响应
+- 附件处理（图片、文本、文档）
+- 消息重试
+- 对话管理
+- OpenAI 和 Google AI API 集成
+"""
+
 from __future__ import annotations
 
 import logging
@@ -60,6 +71,15 @@ def _build_openai_reasoning_config(
     *,
     reasoning_settings: Any,
 ) -> dict[str, Any] | None:
+    """
+    构建 OpenAI 推理配置
+
+    Args:
+        reasoning_settings: OpenAI 推理设置对象
+
+    Returns:
+        推理配置字典，如果推理未启用则返回 None
+    """
     if reasoning_settings is None or not getattr(reasoning_settings, "enabled", True):
         return None
 

@@ -1,3 +1,14 @@
+"""
+数据库初始化和管理模块
+
+本模块负责 SQLite 数据库的初始化和表结构维护。
+
+数据库表结构：
+- conversations: 对话记录
+- messages: 消息记录
+- message_attachments: 消息附件
+"""
+
 from __future__ import annotations
 
 import logging
@@ -8,16 +19,73 @@ logger = logging.getLogger(__name__)
 
 
 def open_db_connection(db_file: Path) -> sqlite3.Connection:
+    """
+    打开数据库连接
+
+    Args:
+        db_file: 数据库文件路径
+
+    Returns:
+        sqlite3.Connection: 数据库连接对象，配置了 Row 工厂以支持字典式访问
+    """
     conn = sqlite3.connect(db_file)
+    # 设置行工厂，使查询结果可以通过列名访问
     conn.row_factory = sqlite3.Row
+    # 启用外键约束
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_db(db_file: Path) -> None:
+    """
+    初始化数据库表结构
+
+    创建所有必要的表，并执行数据库迁移（新增字段）。
+
+    数据库表说明：
+    1. conversations: 对话记录表
+       - id: 主键
+       - username: 用户名
+       - title: 对话标题
+       - model: 使用的模型名称
+       - reasoning_effort: OpenAI 推理强度
+       - thinking_level: Google Thinking 级别
+       - last_response_id: 最后一次响应 ID（用于流式继续）
+       - created_at: 创建时间
+       - updated_at: 更新时间
+
+    2. messages: 消息记录表
+       - id: 主键
+       - conversation_id: 所属对话 ID（外键）
+       - role: 角色（user/assistant/system）
+       - content: 消息内容
+       - reasoning: 推理过程文本
+       - status: 消息状态（complete/incomplete）
+       - created_at: 创建时间
+
+    3. message_attachments: 消息附件表
+       - id: 主键
+       - message_id: 所属消息 ID（外键）
+       - file_name: 文件名
+       - file_path: 文件存储路径
+       - mime_type: MIME 类型
+       - kind: 附件类型（image/text/binary）
+       - parsed_text: 解析后的文本内容（文本文件）
+       - created_at: 创建时间
+
+    Args:
+        db_file: 数据库文件路径
+
+    Returns:
+        无
+    """
     logger.info("数据库初始化开始: 数据库=%s", db_file)
+
+    # 确保数据库目录存在
     db_file.parent.mkdir(parents=True, exist_ok=True)
+
     with open_db_connection(db_file) as conn:
+        # 创建对话表
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS conversations (
@@ -33,6 +101,8 @@ def init_db(db_file: Path) -> None:
             )
             """
         )
+
+        # 创建消息表
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -47,6 +117,8 @@ def init_db(db_file: Path) -> None:
             )
             """
         )
+
+        # 创建消息附件表
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS message_attachments (
@@ -62,6 +134,8 @@ def init_db(db_file: Path) -> None:
             )
             """
         )
+
+        # 获取当前表结构，用于数据库迁移
         message_columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(messages)").fetchall()
@@ -70,25 +144,35 @@ def init_db(db_file: Path) -> None:
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
         }
+
+        # 数据库迁移：新增 reasoning_effort 字段
         if "reasoning_effort" not in conversation_columns:
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
             )
             logger.info("数据库迁移完成: conversations 表已新增 reasoning_effort 字段")
+
+        # 数据库迁移：新增 thinking_level 字段
         if "thinking_level" not in conversation_columns:
             conn.execute(
                 "ALTER TABLE conversations ADD COLUMN thinking_level TEXT NOT NULL DEFAULT ''"
             )
             logger.info("数据库迁移完成: conversations 表已新增 thinking_level 字段")
+
+        # 数据库迁移：新增 reasoning 字段
         if "reasoning" not in message_columns:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''"
             )
             logger.info("数据库迁移完成: messages 表已新增 reasoning 字段")
+
+        # 数据库迁移：新增 status 字段
         if "status" not in message_columns:
             conn.execute(
                 "ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete'"
             )
             logger.info("数据库迁移完成: messages 表已新增 status 字段")
+
         conn.commit()
+
     logger.info("数据库初始化完成: 数据库=%s", db_file)

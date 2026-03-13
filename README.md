@@ -266,19 +266,22 @@ bash deploy.sh
 ```
 gtpweb/
 ├── blueprints/        # 业务路由模块
+│   ├── __init__.py
 │   ├── auth.py        # 认证与登录页面路由
 │   ├── admin.py       # 后台管理路由
 │   ├── conversation.py# 会话管理路由
 │   └── chat.py        # 聊天流式路由
+├── __init__.py        # 包初始化文件
 ├── ai_providers.py    # 多来源模型注册与 Gemini 转换逻辑
 ├── app_factory.py     # Flask 应用装配
+├── assistant_actions.py # AI 助手工具函数和 Action 支持
 ├── attachments.py     # 附件校验与 Word/Excel 解析引擎
 ├── config.py          # 动态环境配置加载器
 ├── db.py              # SQLite 交互层
 ├── jsonc.py           # JSONC 解析器（支持注释）
 ├── logging_config.py  # 日志配置
 ├── openai_stream.py   # SSE 流式输出封装
-├── routes.py         # 路由注册兼容层
+├── routes.py          # 路由注册兼容层
 ├── runtime_state.py   # 运行时状态管理
 ├── user_store.py      # 用户配置加载
 └── utils.py           # 通用工具函数

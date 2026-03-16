@@ -61,7 +61,6 @@
         "thinking": {
           "enabled": true,
           "include_thoughts": true,
-          "budget": 8192,
           "level": "high",
           "level_options": ["low", "high"]
         }

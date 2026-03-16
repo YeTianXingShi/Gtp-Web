@@ -18,6 +18,47 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _get_table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    return {
+        str(row["name"])
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    columns: set[str],
+    column_name: str,
+    column_sql: str,
+) -> None:
+    if column_name in columns:
+        return
+
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
+    columns.add(column_name)
+    logger.info("数据库迁移完成: %s 表已新增 %s 字段", table_name, column_name)
+
+
+def _add_timestamp_column_if_missing(
+    conn: sqlite3.Connection,
+    *,
+    table_name: str,
+    columns: set[str],
+    column_name: str,
+) -> None:
+    if column_name in columns:
+        return
+
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} TEXT")
+    conn.execute(
+        f"UPDATE {table_name} SET {column_name} = CURRENT_TIMESTAMP WHERE {column_name} IS NULL"
+    )
+    columns.add(column_name)
+    logger.info("数据库迁移完成: %s 表已新增 %s 时间字段", table_name, column_name)
+
+
 def open_db_connection(db_file: Path) -> sqlite3.Connection:
     """
     打开数据库连接
@@ -193,6 +234,209 @@ def init_db(db_file: Path) -> None:
             """
         )
 
+        # 获取当前表结构，用于数据库迁移
+        message_columns = _get_table_columns(conn, "messages")
+        conversation_columns = _get_table_columns(conn, "conversations")
+        pdf_document_columns = _get_table_columns(conn, "pdf_documents")
+        pdf_page_columns = _get_table_columns(conn, "pdf_pages")
+        pdf_section_columns = _get_table_columns(conn, "pdf_sections")
+
+        # 数据库迁移：新增 reasoning_effort 字段
+        _add_column_if_missing(
+            conn,
+            table_name="conversations",
+            columns=conversation_columns,
+            column_name="reasoning_effort",
+            column_sql="reasoning_effort TEXT NOT NULL DEFAULT ''",
+        )
+
+        # 数据库迁移：新增 thinking_level 字段
+        _add_column_if_missing(
+            conn,
+            table_name="conversations",
+            columns=conversation_columns,
+            column_name="thinking_level",
+            column_sql="thinking_level TEXT NOT NULL DEFAULT ''",
+        )
+
+        # 数据库迁移：新增 reasoning 字段
+        _add_column_if_missing(
+            conn,
+            table_name="messages",
+            columns=message_columns,
+            column_name="reasoning",
+            column_sql="reasoning TEXT NOT NULL DEFAULT ''",
+        )
+
+        # 数据库迁移：新增 status 字段
+        _add_column_if_missing(
+            conn,
+            table_name="messages",
+            columns=message_columns,
+            column_name="status",
+            column_sql="status TEXT NOT NULL DEFAULT 'complete'",
+        )
+
+        # 数据库迁移：补齐 PDF 工作台文档表字段
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="created_at",
+            column_sql="created_at TEXT",
+        )
+        if "created_at" in pdf_document_columns:
+            conn.execute(
+                "UPDATE pdf_documents SET created_at = CURRENT_TIMESTAMP WHERE created_at IS NULL"
+            )
+
+        _add_timestamp_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="updated_at",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="storage_path",
+            column_sql="storage_path TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="display_title",
+            column_sql="display_title TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="parse_status",
+            column_sql="parse_status TEXT NOT NULL DEFAULT 'pending'",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="parse_error",
+            column_sql="parse_error TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="parse_warning",
+            column_sql="parse_warning TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="section_source",
+            column_sql="section_source TEXT NOT NULL DEFAULT 'pages'",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="file_size_bytes",
+            column_sql="file_size_bytes INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="page_count",
+            column_sql="page_count INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="total_chars",
+            column_sql="total_chars INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_documents",
+            columns=pdf_document_columns,
+            column_name="parsed_at",
+            column_sql="parsed_at TEXT",
+        )
+
+        # 数据库迁移：补齐 PDF 页表字段
+        _add_timestamp_column_if_missing(
+            conn,
+            table_name="pdf_pages",
+            columns=pdf_page_columns,
+            column_name="created_at",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_pages",
+            columns=pdf_page_columns,
+            column_name="text",
+            column_sql="text TEXT NOT NULL DEFAULT ''",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_pages",
+            columns=pdf_page_columns,
+            column_name="char_count",
+            column_sql="char_count INTEGER NOT NULL DEFAULT 0",
+        )
+        # 数据库迁移：补齐 PDF 章节表字段
+        _add_timestamp_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="created_at",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="parent_id",
+            column_sql="parent_id INTEGER",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="level",
+            column_sql="level INTEGER NOT NULL DEFAULT 1",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="start_page",
+            column_sql="start_page INTEGER NOT NULL DEFAULT 1",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="end_page",
+            column_sql="end_page INTEGER NOT NULL DEFAULT 1",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="sort_index",
+            column_sql="sort_index INTEGER NOT NULL DEFAULT 0",
+        )
+        _add_column_if_missing(
+            conn,
+            table_name="pdf_sections",
+            columns=pdf_section_columns,
+            column_name="source",
+            column_sql="source TEXT NOT NULL DEFAULT 'outline'",
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pdf_documents_username_updated ON pdf_documents (username, updated_at DESC, id DESC)"
         )
@@ -202,44 +446,6 @@ def init_db(db_file: Path) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pdf_sections_document_sort ON pdf_sections (document_id, sort_index ASC)"
         )
-
-        # 获取当前表结构，用于数据库迁移
-        message_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(messages)").fetchall()
-        }
-        conversation_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
-        }
-
-        # 数据库迁移：新增 reasoning_effort 字段
-        if "reasoning_effort" not in conversation_columns:
-            conn.execute(
-                "ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("数据库迁移完成: conversations 表已新增 reasoning_effort 字段")
-
-        # 数据库迁移：新增 thinking_level 字段
-        if "thinking_level" not in conversation_columns:
-            conn.execute(
-                "ALTER TABLE conversations ADD COLUMN thinking_level TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("数据库迁移完成: conversations 表已新增 thinking_level 字段")
-
-        # 数据库迁移：新增 reasoning 字段
-        if "reasoning" not in message_columns:
-            conn.execute(
-                "ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''"
-            )
-            logger.info("数据库迁移完成: messages 表已新增 reasoning 字段")
-
-        # 数据库迁移：新增 status 字段
-        if "status" not in message_columns:
-            conn.execute(
-                "ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'complete'"
-            )
-            logger.info("数据库迁移完成: messages 表已新增 status 字段")
 
         conn.commit()
 

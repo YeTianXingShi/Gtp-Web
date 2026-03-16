@@ -142,9 +142,9 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
                 INSERT INTO pdf_documents (
                     username, original_file_name, storage_path, display_title,
                     parse_status, parse_error, parse_warning, section_source,
-                    file_size_bytes, page_count, total_chars
+                    file_size_bytes, page_count, total_chars, created_at, updated_at
                 )
-                VALUES (?, ?, '', ?, 'processing', '', '', 'pages', ?, 0, 0)
+                VALUES (?, ?, '', ?, 'processing', '', '', 'pages', ?, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
                 (username, original_name, display_title, len(raw)),
             )
@@ -186,8 +186,8 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
                 for page in parsed.pages:
                     conn.execute(
                         """
-                        INSERT INTO pdf_pages (document_id, page_number, text, char_count)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO pdf_pages (document_id, page_number, text, char_count, created_at)
+                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
                         """,
                         (document_id, page.page_number, page.text, page.char_count),
                     )
@@ -202,9 +202,9 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
                     cursor = conn.execute(
                         """
                         INSERT INTO pdf_sections (
-                            document_id, parent_id, title, level, start_page, end_page, sort_index, source
+                            document_id, parent_id, title, level, start_page, end_page, sort_index, source, created_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                         """,
                         (
                             document_id,

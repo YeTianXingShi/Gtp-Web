@@ -23,6 +23,7 @@ from .blueprints import register_blueprints
 from .config import BASE_DIR, load_config
 from .db import init_db
 from .logging_config import configure_logging, register_request_logging
+from .pdf_workbench_tasks import recover_incomplete_pdf_documents
 from .runtime_state import create_runtime_state
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,8 @@ def create_app() -> Flask:
     # 配置应用密钥和会话
     app.secret_key = config.secret_key
     app.permanent_session_lifetime = timedelta(hours=12)
+    app.config["JSON_AS_ASCII"] = False
+    app.json.ensure_ascii = False
 
     # 保存配置路径到应用配置
     app.config["ENV_DIR"] = str(config.env_dir)
@@ -117,6 +120,7 @@ def create_app() -> Flask:
 
     # 初始化数据库
     init_db(config.db_file)
+    recover_incomplete_pdf_documents(config.db_file)
     logger.info("应用启动: 数据库初始化完成 数据库=%s", config.db_file)
 
     # 创建上传目录

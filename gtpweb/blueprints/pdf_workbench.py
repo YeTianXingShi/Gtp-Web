@@ -17,14 +17,15 @@ from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
 from gtpweb.pdf_workbench import (
     PDF_MAX_EXCERPT_CHARS,
+    PDF_PARSE_STAGE_PENDING,
     PDF_PARSE_STATUS_FAILED,
-    PDF_PARSE_STATUS_PROCESSING,
+    PDF_PARSE_STATUS_PENDING,
     PDF_PARSE_STATUS_READY,
     build_excerpt_text_blocks,
     build_pdf_section_tree,
-    parse_pdf_document,
     serialize_pdf_document_row,
 )
+from gtpweb.pdf_workbench_tasks import enqueue_pdf_parse_job
 from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
@@ -50,7 +51,7 @@ def _load_owned_document(conn: Any, document_id: int, username: str) -> Any:
     return conn.execute(
         """
         SELECT id, username, original_file_name, storage_path, display_title, parse_status,
-               parse_error, parse_warning, section_source, file_size_bytes,
+               parse_progress, parse_stage, parse_error, parse_warning, section_source, file_size_bytes,
                page_count, total_chars, created_at, updated_at, parsed_at
         FROM pdf_documents
         WHERE id = ? AND username = ?
@@ -90,7 +91,7 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
             rows = conn.execute(
                 """
                 SELECT id, username, original_file_name, storage_path, display_title, parse_status,
-                       parse_error, parse_warning, section_source, file_size_bytes,
+                       parse_progress, parse_stage, parse_error, parse_warning, section_source, file_size_bytes,
                        page_count, total_chars, created_at, updated_at, parsed_at
                 FROM pdf_documents
                 WHERE username = ?
@@ -141,99 +142,65 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
                 """
                 INSERT INTO pdf_documents (
                     username, original_file_name, storage_path, display_title,
-                    parse_status, parse_error, parse_warning, section_source,
+                    parse_status, parse_progress, parse_stage, parse_error, parse_warning, section_source,
                     file_size_bytes, page_count, total_chars, created_at, updated_at
                 )
-                VALUES (?, ?, '', ?, 'processing', '', '', 'pages', ?, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (?, ?, '', ?, ?, 0, ?, '', '', 'pages', ?, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (username, original_name, display_title, len(raw)),
+                (username, original_name, display_title, PDF_PARSE_STATUS_PENDING, PDF_PARSE_STAGE_PENDING, len(raw)),
             )
             document_id = int(cursor.lastrowid)
             conn.commit()
 
         user_dir = upload_dir / "pdf-workbench" / safe_filename(username)
-        user_dir.mkdir(parents=True, exist_ok=True)
         storage_path = user_dir / f"{document_id}_{safe_filename(display_title)}.pdf"
-        storage_path.write_bytes(raw)
-
-        logger.info("PDF 上传完成，开始解析: 用户=%s 文档ID=%s 文件=%s", username, document_id, storage_path)
         try:
-            parsed = parse_pdf_document(storage_path, display_name=display_title)
+            user_dir.mkdir(parents=True, exist_ok=True)
+            storage_path.write_bytes(raw)
             with open_db_connection(db_file) as conn:
                 conn.execute(
                     """
                     UPDATE pdf_documents
-                    SET storage_path = ?, display_title = ?, parse_status = ?, parse_error = '',
-                        parse_warning = ?, section_source = ?, file_size_bytes = ?,
-                        page_count = ?, total_chars = ?, parsed_at = CURRENT_TIMESTAMP,
-                        updated_at = CURRENT_TIMESTAMP
+                    SET storage_path = ?, display_title = ?, parse_status = ?, parse_progress = 0,
+                        parse_stage = ?, parse_error = '', parse_warning = '', section_source = 'pages',
+                        file_size_bytes = ?, page_count = 0, total_chars = 0,
+                        parsed_at = NULL, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
                     (
                         str(storage_path),
-                        parsed.display_title[:120],
-                        PDF_PARSE_STATUS_READY,
-                        "\n".join(parsed.warnings),
-                        parsed.section_source,
+                        display_title,
+                        PDF_PARSE_STATUS_PENDING,
+                        PDF_PARSE_STAGE_PENDING,
                         len(raw),
-                        parsed.page_count,
-                        parsed.total_chars,
                         document_id,
                     ),
                 )
-                conn.execute("DELETE FROM pdf_pages WHERE document_id = ?", (document_id,))
-                conn.execute("DELETE FROM pdf_sections WHERE document_id = ?", (document_id,))
-                for page in parsed.pages:
-                    conn.execute(
-                        """
-                        INSERT INTO pdf_pages (document_id, page_number, text, char_count, created_at)
-                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (document_id, page.page_number, page.text, page.char_count),
-                    )
-
-                section_id_by_sort: dict[int, int] = {}
-                for section in parsed.sections:
-                    parent_id = (
-                        section_id_by_sort.get(section.parent_sort_index)
-                        if section.parent_sort_index is not None
-                        else None
-                    )
-                    cursor = conn.execute(
-                        """
-                        INSERT INTO pdf_sections (
-                            document_id, parent_id, title, level, start_page, end_page, sort_index, source, created_at
-                        )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                        """,
-                        (
-                            document_id,
-                            parent_id,
-                            section.title[:200],
-                            section.level,
-                            section.start_page,
-                            section.end_page,
-                            section.sort_index,
-                            section.source,
-                        ),
-                    )
-                    section_id_by_sort[section.sort_index] = int(cursor.lastrowid)
                 conn.commit()
-
                 row = _load_owned_document(conn, document_id, username)
+            enqueue_pdf_parse_job(
+                db_file=db_file,
+                document_id=document_id,
+                username=username,
+                storage_path=storage_path,
+                file_size_bytes=len(raw),
+                display_title=display_title,
+            )
+            logger.info("PDF 上传完成，已提交后台解析: 用户=%s 文档ID=%s 文件=%s", username, document_id, storage_path)
         except Exception as exc:
-            error_message = str(exc).strip() or "PDF 解析失败"
-            logger.exception("PDF 解析失败: 用户=%s 文档ID=%s", username, document_id)
+            error_message = str(exc).strip() or "PDF 后台任务提交失败"
+            stage_message = "后台任务提交失败"
+            logger.exception("PDF 上传或任务提交失败: 用户=%s 文档ID=%s", username, document_id)
             with open_db_connection(db_file) as conn:
                 conn.execute(
                     """
                     UPDATE pdf_documents
-                    SET storage_path = ?, parse_status = ?, parse_error = ?, parse_warning = '',
-                        section_source = 'pages', page_count = 0, total_chars = 0,
+                    SET storage_path = ?, parse_status = ?, parse_progress = 0, parse_stage = ?, parse_error = ?,
+                        parse_warning = '', section_source = 'pages', page_count = 0, total_chars = 0,
                         parsed_at = NULL, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ?
                     """,
-                    (str(storage_path), PDF_PARSE_STATUS_FAILED, error_message[:500], document_id),
+                    (str(storage_path), PDF_PARSE_STATUS_FAILED, stage_message, error_message[:500], document_id),
                 )
                 conn.commit()
                 row = _load_owned_document(conn, document_id, username)
@@ -245,10 +212,10 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
                         "document": serialize_pdf_document_row(row),
                     }
                 ),
-                400,
+                500,
             )
 
-        return jsonify({"ok": True, "document": serialize_pdf_document_row(row)}), 201
+        return jsonify({"ok": True, "document": serialize_pdf_document_row(row)}), 202
 
     @bp.get("/api/pdf-documents/<int:document_id>")
     def get_pdf_document(document_id: int) -> Any:

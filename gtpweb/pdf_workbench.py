@@ -5,7 +5,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from gtpweb.attachments import normalize_extracted_text
 
@@ -15,6 +15,12 @@ PDF_PARSE_STATUS_PENDING = "pending"
 PDF_PARSE_STATUS_PROCESSING = "processing"
 PDF_PARSE_STATUS_READY = "ready"
 PDF_PARSE_STATUS_FAILED = "failed"
+
+PDF_PARSE_STAGE_PENDING = "等待后台任务排队"
+PDF_PARSE_STAGE_PROCESSING = "正在解析 PDF"
+PDF_PARSE_STAGE_READY = "解析完成"
+PDF_PARSE_STAGE_FAILED = "解析失败"
+PDF_PARSE_STAGE_INTERRUPTED = "解析任务已中断"
 
 PDF_SECTION_SOURCE_OUTLINE = "outline"
 PDF_SECTION_SOURCE_TOC = "toc"
@@ -37,6 +43,8 @@ PDF_MAX_PAGE_COUNT = 600
 PDF_MAX_TOTAL_CHARS = 1_200_000
 PDF_MAX_EXCERPT_CHARS = 24_000
 PDF_TOC_SCAN_PAGES = 8
+
+PdfParseProgressCallback = Callable[[int, str], None]
 
 
 @dataclass(frozen=True)
@@ -83,25 +91,68 @@ def get_pdf_section_source_label(source: str) -> str:
     return PDF_SECTION_SOURCE_LABELS.get(source, source)
 
 
+def get_default_pdf_parse_progress(status: str) -> int:
+    if status == PDF_PARSE_STATUS_READY:
+        return 100
+    return 0
+
+
+def get_default_pdf_parse_stage(status: str) -> str:
+    if status == PDF_PARSE_STATUS_PENDING:
+        return PDF_PARSE_STAGE_PENDING
+    if status == PDF_PARSE_STATUS_PROCESSING:
+        return PDF_PARSE_STAGE_PROCESSING
+    if status == PDF_PARSE_STATUS_READY:
+        return PDF_PARSE_STAGE_READY
+    if status == PDF_PARSE_STATUS_FAILED:
+        return PDF_PARSE_STAGE_FAILED
+    return status
+
+
+def _row_value(row: sqlite3.Row | Any, key: str, default: Any) -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def serialize_pdf_document_row(row: sqlite3.Row | Any) -> dict[str, Any]:
-    status = str(row["parse_status"] or PDF_PARSE_STATUS_PENDING)
-    source = str(row["section_source"] or PDF_SECTION_SOURCE_PAGES)
+    status = str(_row_value(row, "parse_status", PDF_PARSE_STATUS_PENDING) or PDF_PARSE_STATUS_PENDING)
+    source = str(_row_value(row, "section_source", PDF_SECTION_SOURCE_PAGES) or PDF_SECTION_SOURCE_PAGES)
+    raw_progress = _row_value(row, "parse_progress", None)
+    progress = get_default_pdf_parse_progress(status)
+    if raw_progress is not None:
+        try:
+            progress = int(raw_progress)
+        except (TypeError, ValueError):
+            progress = get_default_pdf_parse_progress(status)
+    if status == PDF_PARSE_STATUS_READY:
+        progress = 100
+    progress = max(0, min(100, progress))
+    stage = str(_row_value(row, "parse_stage", "") or get_default_pdf_parse_stage(status))
+    original_file_name = str(_row_value(row, "original_file_name", ""))
+    display_title = str(_row_value(row, "display_title", "") or Path(original_file_name).stem)
     return {
-        "id": int(row["id"]),
-        "original_file_name": str(row["original_file_name"]),
-        "display_title": str(row["display_title"] or Path(str(row["original_file_name"])).stem),
+        "id": int(_row_value(row, "id", 0)),
+        "original_file_name": original_file_name,
+        "display_title": display_title,
         "parse_status": status,
         "parse_status_label": get_pdf_parse_status_label(status),
-        "parse_error": str(row["parse_error"] or ""),
-        "parse_warning": str(row["parse_warning"] or ""),
+        "parse_progress": progress,
+        "parse_stage": stage,
+        "parse_error": str(_row_value(row, "parse_error", "") or ""),
+        "parse_warning": str(_row_value(row, "parse_warning", "") or ""),
         "section_source": source,
         "section_source_label": get_pdf_section_source_label(source),
-        "file_size_bytes": int(row["file_size_bytes"] or 0),
-        "page_count": int(row["page_count"] or 0),
-        "total_chars": int(row["total_chars"] or 0),
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-        "parsed_at": row["parsed_at"],
+        "file_size_bytes": int(_row_value(row, "file_size_bytes", 0) or 0),
+        "page_count": int(_row_value(row, "page_count", 0) or 0),
+        "total_chars": int(_row_value(row, "total_chars", 0) or 0),
+        "created_at": _row_value(row, "created_at", None),
+        "updated_at": _row_value(row, "updated_at", None),
+        "parsed_at": _row_value(row, "parsed_at", None),
     }
 
 
@@ -152,6 +203,16 @@ def _import_pdfplumber() -> Any:
             "当前环境缺少 `pdfplumber` 依赖，无法解析 PDF，请先执行 `pip install -r requirements.txt`。"
         ) from exc
     return pdfplumber
+
+
+def _emit_parse_progress(
+    progress_callback: PdfParseProgressCallback | None,
+    progress: int,
+    stage: str,
+) -> None:
+    if progress_callback is None:
+        return
+    progress_callback(max(0, min(100, int(progress))), str(stage or "").strip())
 
 
 def _build_page_lookup(pdf: Any) -> dict[int, int]:
@@ -428,10 +489,16 @@ def detect_sections_from_toc_pages(pages: Sequence[ParsedPdfPage]) -> tuple[Pars
     )
 
 
-def parse_pdf_document(file_path: Path, *, display_name: str = "") -> ParsedPdfDocument:
+def parse_pdf_document(
+    file_path: Path,
+    *,
+    display_name: str = "",
+    progress_callback: PdfParseProgressCallback | None = None,
+) -> ParsedPdfDocument:
     pdfplumber = _import_pdfplumber()
     title = display_name.strip() or Path(file_path).stem
 
+    _emit_parse_progress(progress_callback, 5, "正在打开 PDF 文件")
     with pdfplumber.open(str(file_path)) as pdf:
         page_count = len(pdf.pages)
         if page_count <= 0:
@@ -439,6 +506,7 @@ def parse_pdf_document(file_path: Path, *, display_name: str = "") -> ParsedPdfD
         if page_count > PDF_MAX_PAGE_COUNT:
             raise ValueError(f"PDF 页数过多（{page_count} 页），当前上限为 {PDF_MAX_PAGE_COUNT} 页。")
 
+        _emit_parse_progress(progress_callback, 10, f"已读取文档信息，共 {page_count} 页")
         pages: list[ParsedPdfPage] = []
         total_chars = 0
         for page_number, page in enumerate(pdf.pages, start=1):
@@ -455,10 +523,18 @@ def parse_pdf_document(file_path: Path, *, display_name: str = "") -> ParsedPdfD
                     char_count=len(text),
                 )
             )
+            page_progress = 10 + round(page_number / page_count * 60)
+            _emit_parse_progress(
+                progress_callback,
+                page_progress,
+                f"已完成第 {page_number}/{page_count} 页文本提取",
+            )
 
+        _emit_parse_progress(progress_callback, 75, "正在校验提取结果")
         if not any(page.text for page in pages):
             raise ValueError("未提取到可用文本，当前仅支持文本型 PDF，不支持扫描件 OCR。")
 
+        _emit_parse_progress(progress_callback, 82, "正在识别章节结构")
         sections = extract_outline_sections(pdf)
         section_source = PDF_SECTION_SOURCE_OUTLINE
         warnings: list[str] = []
@@ -468,6 +544,7 @@ def parse_pdf_document(file_path: Path, *, display_name: str = "") -> ParsedPdfD
         if not sections:
             section_source = PDF_SECTION_SOURCE_PAGES
             warnings.append("未识别到章节结构，已退化为按页浏览。")
+        _emit_parse_progress(progress_callback, 88, "正在整理解析结果")
 
     return ParsedPdfDocument(
         display_title=title,

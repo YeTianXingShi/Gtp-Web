@@ -42,7 +42,9 @@ const state = {
   pollTimer: null,
   uploadProgress: 0,
   uploadProgressPhase: "idle",
-  progressTimer: null,
+  uploadProgressLabel: "准备上传…",
+  progressDocumentId: null,
+  progressHideTimer: null,
 };
 
 function getErrorMessage(error) {
@@ -75,8 +77,8 @@ function uploadPdfFile(file) {
         return;
       }
       const ratio = event.total > 0 ? event.loaded / event.total : 0;
-      const progress = Math.min(75, Math.max(5, ratio * 75));
-      setUploadProgress(progress, "uploading");
+      const progress = Math.min(100, Math.max(1, ratio * 100));
+      setUploadProgress(progress, "uploading", "正在上传 PDF…");
     });
 
     xhr.addEventListener("load", () => {
@@ -122,69 +124,100 @@ function clearPollTimer() {
   }
 }
 
-function clearProgressTimer() {
-  if (state.progressTimer != null) {
-    window.clearInterval(state.progressTimer);
-    state.progressTimer = null;
+function clearProgressHideTimer() {
+  if (state.progressHideTimer != null) {
+    window.clearTimeout(state.progressHideTimer);
+    state.progressHideTimer = null;
   }
 }
 
 function renderUploadProgress() {
-  const visible = state.uploading || state.uploadProgressPhase === "error";
+  const visible = state.uploading || state.uploadProgressPhase !== "idle";
   uploadProgressEl.hidden = !visible;
   uploadProgressEl.classList.toggle("is-warning", state.uploadProgressPhase === "error");
   uploadProgressBarEl.style.width = `${Math.max(0, Math.min(100, state.uploadProgress))}%`;
   uploadProgressValueEl.textContent = `${Math.round(state.uploadProgress)}%`;
-
-  if (state.uploadProgressPhase === "uploading") {
-    uploadProgressLabelEl.textContent = "正在上传 PDF…";
-  } else if (state.uploadProgressPhase === "processing") {
-    uploadProgressLabelEl.textContent = "服务器正在解析 PDF…";
-  } else if (state.uploadProgressPhase === "done") {
-    uploadProgressLabelEl.textContent = "解析完成。";
-  } else if (state.uploadProgressPhase === "error") {
-    uploadProgressLabelEl.textContent = "上传或解析失败。";
-  } else {
-    uploadProgressLabelEl.textContent = "准备上传…";
-  }
+  uploadProgressLabelEl.textContent = state.uploadProgressLabel || "准备上传…";
 }
 
-function setUploadProgress(progress, phase) {
+function setUploadProgress(progress, phase, label = "") {
   if (typeof phase === "string") {
     state.uploadProgressPhase = phase;
   }
   if (Number.isFinite(progress)) {
     state.uploadProgress = Math.max(0, Math.min(100, progress));
   }
+  if (typeof label === "string" && label) {
+    state.uploadProgressLabel = label;
+  } else if (state.uploadProgressPhase === "idle") {
+    state.uploadProgressLabel = "准备上传…";
+  }
   renderUploadProgress();
 }
 
-function startProcessingProgress() {
-  clearProgressTimer();
-  state.progressTimer = window.setInterval(() => {
-    if (!state.uploading || state.uploadProgressPhase !== "processing") {
-      clearProgressTimer();
-      return;
-    }
-    if (state.uploadProgress < 90) {
-      state.uploadProgress = Math.min(90, state.uploadProgress + 2);
-      renderUploadProgress();
-    }
-  }, 700);
+function resetUploadProgress() {
+  clearProgressHideTimer();
+  state.uploadProgress = 0;
+  state.uploadProgressPhase = "idle";
+  state.uploadProgressLabel = "准备上传…";
+  renderUploadProgress();
 }
 
-function finishUploadProgress(success = true) {
-  clearProgressTimer();
-  if (success) {
-    setUploadProgress(100, "done");
-    window.setTimeout(() => {
-      if (!state.uploading) {
-        uploadProgressEl.hidden = true;
-      }
-    }, 1200);
+function getDocumentProgress(document) {
+  const value = Number.parseInt(document?.parse_progress, 10);
+  if (!Number.isFinite(value)) {
+    return document?.parse_status === "ready" ? 100 : 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function getDocumentStage(document) {
+  return String(document?.parse_stage || document?.parse_status_label || "");
+}
+
+function syncTrackedUploadProgress() {
+  if (state.uploading || !Number.isInteger(state.progressDocumentId)) {
     return;
   }
-  setUploadProgress(state.uploadProgress || 100, "error");
+  const trackedDocument = (
+    state.currentDocument?.id === state.progressDocumentId
+      ? state.currentDocument
+      : state.documents.find((item) => item.id === state.progressDocumentId)
+  ) || null;
+
+  if (!trackedDocument) {
+    return;
+  }
+
+  const progress = getDocumentProgress(trackedDocument);
+  const stage = getDocumentStage(trackedDocument);
+
+  if (trackedDocument.parse_status === "ready") {
+    setUploadResult(
+      trackedDocument.parse_warning || "PDF 解析完成。",
+      trackedDocument.parse_warning ? "is-warning" : "is-success",
+    );
+    setUploadProgress(100, "done", stage || "解析完成");
+    clearProgressHideTimer();
+    state.progressHideTimer = window.setTimeout(() => {
+      if (state.progressDocumentId === trackedDocument.id) {
+        state.progressDocumentId = null;
+      }
+      resetUploadProgress();
+    }, 1500);
+    return;
+  }
+
+  clearProgressHideTimer();
+  if (trackedDocument.parse_status === "failed") {
+    setUploadResult(trackedDocument.parse_error || "PDF 解析失败。", "is-warning");
+    setUploadProgress(progress, "error", stage || "解析失败");
+    return;
+  }
+
+  if (["pending", "processing"].includes(trackedDocument.parse_status)) {
+    setUploadProgress(progress, "processing", stage || trackedDocument.parse_status_label);
+  }
 }
 
 function schedulePollIfNeeded() {
@@ -194,7 +227,7 @@ function schedulePollIfNeeded() {
   }
   state.pollTimer = window.setTimeout(() => {
     void loadDocuments({ preserveSelection: true, refreshDetail: true });
-  }, 2500);
+  }, 1200);
 }
 
 function setUploadResult(message, type = "") {
@@ -263,15 +296,26 @@ function renderDocuments() {
     if (doc.id === state.currentDocumentId) {
       button.classList.add("is-active");
     }
+    const docProgress = `${formatNumber(doc.parse_progress)}%`;
+    const docStage = escapeHtml(doc.parse_stage || doc.parse_status_label);
+    const metaHtml = doc.parse_status === "ready"
+      ? `
+        <span>${formatNumber(doc.page_count)} 页</span>
+        <span>${formatNumber(doc.total_chars)} 字</span>
+        <span>${escapeHtml(doc.section_source_label)}</span>
+      `
+      : `
+        <span>${docProgress}</span>
+        <span>${docStage}</span>
+        <span>${escapeHtml(doc.section_source_label)}</span>
+      `;
     button.innerHTML = `
       <div class="pdf-doc-item-head">
         <span class="pdf-doc-item-title">${escapeHtml(doc.display_title)}</span>
         <span class="status-badge is-${escapeHtml(doc.parse_status)}">${escapeHtml(doc.parse_status_label)}</span>
       </div>
       <div class="pdf-doc-item-meta">
-        <span>${formatNumber(doc.page_count)} 页</span>
-        <span>${formatNumber(doc.total_chars)} 字</span>
-        <span>${escapeHtml(doc.section_source_label)}</span>
+        ${metaHtml}
       </div>
       <div class="pdf-doc-item-name">${escapeHtml(doc.original_file_name)}</div>
     `;
@@ -341,17 +385,6 @@ function renderPages(pages) {
 }
 
 function renderDocumentMeta(document) {
-  if (state.uploading && document) {
-    if (document.parse_status === "ready") {
-      finishUploadProgress(true);
-    } else if (["pending", "processing"].includes(document.parse_status)) {
-      setUploadProgress(Math.max(state.uploadProgress, 80), "processing");
-      startProcessingProgress();
-    } else if (document.parse_status === "failed") {
-      finishUploadProgress(false);
-    }
-  }
-
   docTitleEl.textContent = document?.display_title || "请选择一个 PDF";
   if (!document) {
     docStatusEl.textContent = "上传后会在这里显示解析状态与摘要信息。";
@@ -367,9 +400,12 @@ function renderDocumentMeta(document) {
     return;
   }
 
-  docStatusEl.innerHTML = `当前状态：<span class="status-badge is-${escapeHtml(document.parse_status)}">${escapeHtml(document.parse_status_label)}</span>`;
+  const documentProgress = `${formatNumber(document.parse_progress)}%`;
+  const documentStage = escapeHtml(document.parse_stage || document.parse_status_label);
+  docStatusEl.innerHTML = `当前状态：<span class="status-badge is-${escapeHtml(document.parse_status)}">${escapeHtml(document.parse_status_label)}</span> · ${documentStage} · ${documentProgress}`;
   docMetaEl.innerHTML = `
     <div class="pdf-meta-item"><span>原文件</span><strong>${escapeHtml(document.original_file_name)}</strong></div>
+    <div class="pdf-meta-item"><span>解析进度</span><strong>${documentProgress}</strong></div>
     <div class="pdf-meta-item"><span>页数</span><strong>${formatNumber(document.page_count)}</strong></div>
     <div class="pdf-meta-item"><span>字符数</span><strong>${formatNumber(document.total_chars)}</strong></div>
     <div class="pdf-meta-item"><span>文件大小</span><strong>${formatFileSize(document.file_size_bytes)}</strong></div>
@@ -382,7 +418,12 @@ function renderDocumentMeta(document) {
   } else if (document.parse_warning) {
     setDocumentMessage(document.parse_warning, "is-warning");
   } else {
-    setDocumentMessage(document.parse_status === "ready" ? "PDF 解析完成，可以开始浏览和节选。" : "等待解析完成后可浏览内容。", document.parse_status === "ready" ? "is-success" : "");
+    setDocumentMessage(
+      document.parse_status === "ready"
+        ? "PDF 解析完成，可以开始浏览和节选。"
+        : `${document.parse_stage || "等待后台任务排队"}（${documentProgress}）`,
+      document.parse_status === "ready" ? "is-success" : "",
+    );
   }
 }
 
@@ -390,6 +431,7 @@ function renderDocumentDetail(data) {
   const document = data?.document || null;
   state.currentDocument = document;
   renderDocumentMeta(document);
+  syncTrackedUploadProgress();
   state.currentExcerpt = null;
   previewMetaEl.textContent = "";
   previewEl.hidden = true;
@@ -406,6 +448,11 @@ function renderDocumentDetail(data) {
     rangeStartEl.value = "";
     rangeEndEl.value = "";
     sectionSelectEl.innerHTML = '<option value="">请选择章节</option>';
+    setPreviewEmpty(
+      !document
+        ? "点击章节、页码或手动输入页范围后开始预览。"
+        : (document.parse_status === "failed" ? "PDF 解析失败，当前无法浏览正文内容。" : "等待解析完成后可浏览内容。"),
+    );
     syncActionButtons();
     return;
   }
@@ -453,6 +500,7 @@ async function loadDocumentDetail(documentId) {
   const data = await fetchJson(`/api/pdf-documents/${documentId}`);
   state.currentDocumentId = data.document.id;
   renderDocumentDetail(data);
+  syncTrackedUploadProgress();
   renderDocuments();
 }
 
@@ -478,7 +526,12 @@ async function loadDocuments(options = {}) {
     state.currentDocumentId = nextDocumentId;
   }
 
+  if (!Number.isInteger(state.progressDocumentId)) {
+    state.progressDocumentId = state.documents.find((item) => ["pending", "processing"].includes(item.parse_status))?.id || null;
+  }
+
   renderDocuments();
+  syncTrackedUploadProgress();
   schedulePollIfNeeded();
 
   if (!state.currentDocumentId) {
@@ -529,24 +582,26 @@ uploadForm.addEventListener("submit", async (event) => {
   }
 
   state.uploading = true;
-  setUploadProgress(3, "uploading");
+  state.progressDocumentId = null;
+  clearProgressHideTimer();
+  setUploadProgress(0, "uploading", "正在上传 PDF…");
   syncActionButtons();
-  setUploadResult("正在上传并解析 PDF，请稍候...");
+  setUploadResult("正在上传 PDF，上传完成后会转入后台解析。");
   try {
     const data = await uploadPdfFile(file);
-    setUploadProgress(78, "processing");
-    startProcessingProgress();
-
+    state.uploading = false;
+    state.progressDocumentId = Number.parseInt(data.document?.id, 10) || null;
     fileInputEl.value = "";
-    setUploadResult("上传成功，PDF 解析完成。", "is-success");
-    finishUploadProgress(true);
+    setUploadResult("上传成功，已提交后台解析任务。", "is-success");
+    syncTrackedUploadProgress();
     await loadDocuments({ preserveSelection: false, refreshDetail: true, preferredId: data.document.id });
   } catch (error) {
-    finishUploadProgress(false);
+    state.uploading = false;
+    state.progressDocumentId = null;
+    setUploadProgress(state.uploadProgress || 0, "error", "上传失败");
     setUploadResult(getErrorMessage(error), "is-warning");
     await loadDocuments({ preserveSelection: true, refreshDetail: true });
   } finally {
-    state.uploading = false;
     syncActionButtons();
   }
 });
@@ -629,6 +684,7 @@ logoutBtn.addEventListener("click", async () => {
 
 window.addEventListener("beforeunload", () => {
   clearPollTimer();
+  clearProgressHideTimer();
 });
 
 (async function init() {

@@ -16,7 +16,7 @@
         "reasoning": {
           "enabled": true,
           "effort": "high",
-          "effort_options": ["low", "medium", "high"],
+          "effort_options": ["minimal", "low", "medium", "high", "xhigh"],
           "summary": "auto"
         }
       },
@@ -26,7 +26,7 @@
         "reasoning": {
           "enabled": true,
           "effort": "medium",
-          "effort_options": ["minimal", "low", "medium"],
+          "effort_options": ["minimal", "low", "medium", "high", "xhigh"],
           "summary": "concise"
         }
       }

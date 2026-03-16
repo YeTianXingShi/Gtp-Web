@@ -26,6 +26,7 @@ from gtpweb.ai_providers import (
     resolve_model_option,
 )
 from gtpweb.config import AppConfig
+from gtpweb.conversation_titles import allocate_default_conversation_title
 from gtpweb.db import open_db_connection
 from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record
@@ -440,8 +441,21 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             strict=True,
         )
 
-        title = str(payload.get("title", "新对话")).strip() or "新对话"
+        requested_title = str(payload.get("title", "")).strip()
         with open_db_connection(db_file) as conn:
+            title = requested_title
+            if not title:
+                title_rows = conn.execute(
+                    """
+                    SELECT title
+                    FROM conversations
+                    WHERE username = ?
+                    ORDER BY id ASC
+                    """,
+                    (username,),
+                ).fetchall()
+                title = allocate_default_conversation_title([str(row["title"]) for row in title_rows])
+
             cursor = conn.execute(
                 """
                 INSERT INTO conversations (username, title, model, reasoning_effort, thinking_level)

@@ -52,6 +52,7 @@ from gtpweb.attachments import (
     validate_attachment,
 )
 from gtpweb.config import AppConfig
+from gtpweb.conversation_titles import generate_conversation_title, is_default_conversation_title
 from gtpweb.db import open_db_connection
 from gtpweb.openai_stream import (
     build_openai_response_input,
@@ -163,6 +164,45 @@ def _save_assistant_message(
         conn.commit()
 
 
+
+def _maybe_update_conversation_title(
+    *,
+    db_file: Path,
+    conversation_id: int,
+    current_title: str,
+    completion_messages: list[dict[str, Any]],
+    selected_provider: str,
+    upstream_model: str,
+    openai_client: Any,
+    google_client: Any,
+) -> None:
+    if not is_default_conversation_title(current_title):
+        return
+
+    title = generate_conversation_title(
+        selected_provider=selected_provider,
+        upstream_model=upstream_model,
+        completion_messages=completion_messages,
+        openai_client=openai_client,
+        google_client=google_client,
+        fallback_title=current_title,
+    )
+    if not title or title == current_title:
+        return
+
+    with open_db_connection(db_file) as conn:
+        conn.execute(
+            """
+            UPDATE conversations
+            SET title = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (title[:60], conversation_id),
+        )
+        conn.commit()
+    logger.info("会话标题已自动更新: 会话ID=%s 标题=%s", conversation_id, title)
+
+
 def _resolve_stream_target(
     conn: Any,
     *,
@@ -262,6 +302,7 @@ def _stream_chat_response(
     upload_dir: Path,
     username: str,
     conversation_id: int,
+    conversation_title: str,
     completion_messages: list[dict[str, Any]],
     selected_provider: str,
     upstream_model: str,
@@ -476,6 +517,19 @@ def _stream_chat_response(
                     attachments=assistant_attachments,
                     status=stored_status,
                 )
+                if stored_status == "complete":
+                    updated_completion_messages = list(completion_messages)
+                    updated_completion_messages.append({"role": "assistant", "content": stored_text})
+                    _maybe_update_conversation_title(
+                        db_file=db_file,
+                        conversation_id=conversation_id,
+                        current_title=conversation_title,
+                        completion_messages=updated_completion_messages,
+                        selected_provider=selected_provider,
+                        upstream_model=upstream_model,
+                        openai_client=openai_client,
+                        google_client=google_client,
+                    )
                 logger.info(
                     "助手消息落库完成: 会话ID=%s 状态=%s 字符数=%s 推理摘要字符=%s 附件数=%s",
                     conversation_id,
@@ -760,19 +814,13 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             else:
                 completion_messages.append({"role": "user", "content": content})
 
-            updated_title = conv["title"]
-            if existing_count == 0 and conv["title"] == "新对话":
-                title_seed = content.strip() if content.strip() else display_content
-                updated_title = title_seed[:30] if title_seed else "新对话"
-
             conn.execute(
                 """
                 UPDATE conversations
-                SET title = ?, model = ?, reasoning_effort = ?, thinking_level = ?, updated_at = CURRENT_TIMESTAMP
+                SET model = ?, reasoning_effort = ?, thinking_level = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
                 (
-                    updated_title,
                     stream_target["selected_model_id"],
                     conversation_settings.reasoning_effort,
                     conversation_settings.thinking_level,
@@ -791,6 +839,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             upload_dir=upload_dir,
             username=username,
             conversation_id=conversation_id,
+            conversation_title=str(conv["title"]),
             completion_messages=completion_messages,
             selected_provider=stream_target["selected_provider"],
             upstream_model=stream_target["upstream_model"],
@@ -914,6 +963,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             upload_dir=upload_dir,
             username=username,
             conversation_id=conversation_id,
+            conversation_title=str(stream_target["conversation"]["title"]),
             completion_messages=completion_messages,
             selected_provider=stream_target["selected_provider"],
             upstream_model=stream_target["upstream_model"],

@@ -42,7 +42,7 @@
           "enabled": true,
           "include_thoughts": true,
           "level": "medium",
-          "level_options": ["low", "medium", "high"]
+          "level_options": ["minimal", "low", "medium", "high"]
         }
       },
       {
@@ -52,7 +52,7 @@
           "enabled": true,
           "include_thoughts": false,
           "level": "high",
-          "level_options": ["medium", "high"]
+          "level_options": ["low", "high"]
         }
       },
       {
@@ -63,7 +63,7 @@
           "include_thoughts": true,
           "budget": 8192,
           "level": "high",
-          "level_options": ["medium", "high"]
+          "level_options": ["low", "high"]
         }
       }
     ]

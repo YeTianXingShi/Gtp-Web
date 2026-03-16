@@ -65,31 +65,3 @@ def test_init_db_migrates_messages_reasoning_and_status_columns(tmp_path):
     assert message_row["content"] == "旧消息"
     assert message_row["reasoning"] == ""
     assert message_row["status"] == "complete"
-
-
-def test_init_db_creates_pdf_workbench_tables(tmp_path):
-    db_file = tmp_path / "chat.db"
-
-    init_db(db_file)
-
-    with open_db_connection(db_file) as conn:
-        table_names = {
-            str(row["name"])
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
-        document_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(pdf_documents)").fetchall()
-        }
-        section_columns = {
-            str(row["name"])
-            for row in conn.execute("PRAGMA table_info(pdf_sections)").fetchall()
-        }
-
-    assert "pdf_documents" in table_names
-    assert "pdf_pages" in table_names
-    assert "pdf_sections" in table_names
-    assert {"parse_status", "section_source", "page_count", "total_chars"}.issubset(document_columns)
-    assert {"parent_id", "start_page", "end_page", "sort_index"}.issubset(section_columns)

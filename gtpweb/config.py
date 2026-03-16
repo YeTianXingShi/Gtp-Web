@@ -88,6 +88,7 @@ ENV_GROUP_SPECS = (
     EnvGroupSpec(
         key="storage",
         filename="storage.env",
+        label="存储配置",
         description="维护数据库与上传目录等存储路径。",
     ),
     EnvGroupSpec(
@@ -202,6 +203,21 @@ class AppConfig:
 
 # 用于标识缺失值的标记对象
 MISSING = object()
+
+
+def _resolve_project_path(path_value: str | Path) -> Path:
+    """
+    将配置中的路径解析为项目根目录下的绝对路径。
+
+    规则：
+    - `~` 路径先展开
+    - 绝对路径直接返回
+    - 相对路径统一相对于项目根目录解析
+    """
+    path = Path(path_value).expanduser()
+    if path.is_absolute():
+        return path
+    return BASE_DIR / path
 
 
 def load_users(users_file: Path) -> dict[str, str]:
@@ -761,11 +777,11 @@ def load_config() -> AppConfig:
     load_env_files(env_files)
 
     # 加载用户配置
-    users_file = Path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
+    users_file = _resolve_project_path(os.getenv("USERS_FILE", str(DEFAULT_USERS_FILE)))
     users = load_users(users_file)
 
     # 加载模型配置
-    model_config_file = Path(os.getenv("MODEL_CONFIG_FILE", str(DEFAULT_MODEL_CONFIG_FILE))).expanduser()
+    model_config_file = _resolve_project_path(os.getenv("MODEL_CONFIG_FILE", str(DEFAULT_MODEL_CONFIG_FILE)))
     model_catalog = load_model_catalog(model_config_file)
 
     # 解析图像工具提供商
@@ -784,8 +800,8 @@ def load_config() -> AppConfig:
     google_image_model = model_catalog.google.image_model
 
     # 存储配置
-    db_file = Path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
-    upload_dir = Path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
+    db_file = _resolve_project_path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
+    upload_dir = _resolve_project_path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
 
     # 附件限制配置
     max_upload_mb = safe_int(os.getenv("MAX_UPLOAD_MB", "15")) or 15
@@ -801,7 +817,7 @@ def load_config() -> AppConfig:
     # 日志配置
     log_level = os.getenv("LOG_LEVEL", "DEBUG").strip().upper() or "DEBUG"
     log_file_raw = os.getenv("LOG_FILE", "").strip()
-    log_file = Path(log_file_raw) if log_file_raw else DEFAULT_LOG_FILE
+    log_file = _resolve_project_path(log_file_raw) if log_file_raw else DEFAULT_LOG_FILE
     log_max_bytes = safe_int(os.getenv("LOG_MAX_BYTES", "10485760")) or 10485760
     log_backup_count = safe_int(os.getenv("LOG_BACKUP_COUNT", "5")) or 5
     log_to_stdout = parse_bool(os.getenv("LOG_TO_STDOUT", "1"), default=True)

@@ -91,7 +91,7 @@ def test_init_db_creates_pdf_workbench_tables(tmp_path):
     assert "pdf_documents" in table_names
     assert "pdf_pages" in table_names
     assert "pdf_sections" in table_names
-    assert {"parse_status", "parse_progress", "parse_stage", "section_source", "page_count", "total_chars"}.issubset(document_columns)
+    assert {"parse_status", "section_source", "page_count", "total_chars"}.issubset(document_columns)
     assert {"parent_id", "start_page", "end_page", "sort_index"}.issubset(section_columns)
 
 
@@ -188,8 +188,7 @@ def test_init_db_migrates_existing_pdf_workbench_tables(tmp_path):
         }
         document_row = conn.execute(
             """
-            SELECT username, original_file_name, created_at, updated_at, display_title, parse_status,
-                   parse_progress, parse_stage, section_source
+            SELECT username, original_file_name, created_at, updated_at, display_title, parse_status, section_source
             FROM pdf_documents
             WHERE id = 1
             """
@@ -214,8 +213,6 @@ def test_init_db_migrates_existing_pdf_workbench_tables(tmp_path):
         "storage_path",
         "display_title",
         "parse_status",
-        "parse_progress",
-        "parse_stage",
         "parse_error",
         "parse_warning",
         "section_source",
@@ -235,8 +232,6 @@ def test_init_db_migrates_existing_pdf_workbench_tables(tmp_path):
     assert document_row["updated_at"]
     assert document_row["display_title"] == ""
     assert document_row["parse_status"] == "pending"
-    assert document_row["parse_progress"] == 0
-    assert document_row["parse_stage"] == ""
     assert document_row["section_source"] == "pages"
     assert page_row["page_number"] == 7
     assert page_row["text"] == ""

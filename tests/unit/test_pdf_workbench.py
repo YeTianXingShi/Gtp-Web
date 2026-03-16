@@ -5,7 +5,6 @@ from gtpweb.pdf_workbench import (
     ParsedPdfPage,
     build_excerpt_text_blocks,
     detect_sections_from_toc_pages,
-    serialize_pdf_document_row,
 )
 
 
@@ -68,27 +67,3 @@ def test_build_excerpt_text_blocks_includes_metadata_and_truncation_notice():
     assert "产品手册" in excerpt["text"]
     assert "第 3 页" in excerpt["text"]
     assert "[提示]" in excerpt["text"]
-
-
-def test_serialize_pdf_document_row_fills_default_progress_and_stage():
-    row = {
-        "id": 7,
-        "original_file_name": "manual.pdf",
-        "display_title": "",
-        "parse_status": "pending",
-        "parse_error": "",
-        "parse_warning": "",
-        "section_source": "pages",
-        "file_size_bytes": 1024,
-        "page_count": 0,
-        "total_chars": 0,
-        "created_at": "2026-03-16 00:00:00",
-        "updated_at": "2026-03-16 00:00:00",
-        "parsed_at": None,
-    }
-
-    document = serialize_pdf_document_row(row)
-
-    assert document["display_title"] == "manual"
-    assert document["parse_progress"] == 0
-    assert document["parse_stage"] == "等待后台任务排队"

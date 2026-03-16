@@ -186,8 +186,6 @@ def init_db(db_file: Path) -> None:
                 display_title TEXT NOT NULL DEFAULT '',
                 parse_status TEXT NOT NULL DEFAULT 'pending'
                     CHECK (parse_status IN ('pending', 'processing', 'ready', 'failed')),
-                parse_progress INTEGER NOT NULL DEFAULT 0,
-                parse_stage TEXT NOT NULL DEFAULT '',
                 parse_error TEXT NOT NULL DEFAULT '',
                 parse_warning TEXT NOT NULL DEFAULT '',
                 section_source TEXT NOT NULL DEFAULT 'pages'
@@ -318,20 +316,6 @@ def init_db(db_file: Path) -> None:
             columns=pdf_document_columns,
             column_name="parse_status",
             column_sql="parse_status TEXT NOT NULL DEFAULT 'pending'",
-        )
-        _add_column_if_missing(
-            conn,
-            table_name="pdf_documents",
-            columns=pdf_document_columns,
-            column_name="parse_progress",
-            column_sql="parse_progress INTEGER NOT NULL DEFAULT 0",
-        )
-        _add_column_if_missing(
-            conn,
-            table_name="pdf_documents",
-            columns=pdf_document_columns,
-            column_name="parse_stage",
-            column_sql="parse_stage TEXT NOT NULL DEFAULT ''",
         )
         _add_column_if_missing(
             conn,

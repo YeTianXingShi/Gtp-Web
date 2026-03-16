@@ -4,8 +4,6 @@ import io
 
 from gtpweb.pdf_workbench import (
     PDF_PARSE_STATUS_FAILED,
-    PDF_PARSE_STATUS_PENDING,
-    PDF_PARSE_STATUS_READY,
     PDF_SECTION_SOURCE_OUTLINE,
     ParsedPdfDocument,
     ParsedPdfPage,
@@ -20,36 +18,10 @@ def test_pdf_workbench_page_requires_login(client):
     assert "/login" in resp.headers["Location"]
 
 
-def test_pdf_workbench_upload_returns_pending_and_json_uses_utf8(logged_in_client, monkeypatch):
-    from gtpweb.blueprints import pdf_workbench as pdf_workbench_blueprint
-
-    monkeypatch.setattr(pdf_workbench_blueprint, "enqueue_pdf_parse_job", lambda **kwargs: None)
-
-    upload_resp = logged_in_client.post(
-        "/api/pdf-documents",
-        data={"file": (io.BytesIO(b"%PDF-1.4 fake"), "queued.pdf")},
-        content_type="multipart/form-data",
-    )
-
-    assert upload_resp.status_code == 202
-    upload_data = upload_resp.get_json()
-    assert upload_data["document"]["parse_status"] == PDF_PARSE_STATUS_PENDING
-    assert upload_data["document"]["parse_progress"] == 0
-    assert upload_data["document"]["parse_stage"] == "等待后台任务排队"
-
-    raw_body = upload_resp.get_data(as_text=True)
-    assert "等待后台任务排队" in raw_body
-    assert "\\u7b49\\u5f85\\u540e\\u53f0\\u4efb\\u52a1\\u6392\\u961f" not in raw_body
-
-
 def test_pdf_workbench_upload_browse_and_excerpt(logged_in_client, monkeypatch):
     from gtpweb.blueprints import pdf_workbench as pdf_workbench_blueprint
-    from gtpweb import pdf_workbench_tasks
 
-    def _fake_parse(_file_path, *, display_name="", progress_callback=None):
-        if progress_callback is not None:
-            progress_callback(15, "正在读取 PDF 页面")
-            progress_callback(70, "正在识别章节结构")
+    def _fake_parse(_file_path, *, display_name=""):
         return ParsedPdfDocument(
             display_title=display_name or "技术白皮书",
             page_count=4,
@@ -84,13 +56,7 @@ def test_pdf_workbench_upload_browse_and_excerpt(logged_in_client, monkeypatch):
             warnings=(),
         )
 
-    monkeypatch.setattr(pdf_workbench_tasks, "parse_pdf_document", _fake_parse)
-
-    def _enqueue_inline(**kwargs):
-        pdf_workbench_tasks.run_pdf_parse_job(**kwargs)
-        return None
-
-    monkeypatch.setattr(pdf_workbench_blueprint, "enqueue_pdf_parse_job", _enqueue_inline)
+    monkeypatch.setattr(pdf_workbench_blueprint, "parse_pdf_document", _fake_parse)
 
     upload_resp = logged_in_client.post(
         "/api/pdf-documents",
@@ -98,23 +64,18 @@ def test_pdf_workbench_upload_browse_and_excerpt(logged_in_client, monkeypatch):
         content_type="multipart/form-data",
     )
 
-    assert upload_resp.status_code == 202
+    assert upload_resp.status_code == 201
     upload_data = upload_resp.get_json()
     document_id = int(upload_data["document"]["id"])
-    assert upload_data["document"]["parse_status"] == PDF_PARSE_STATUS_PENDING
+    assert upload_data["document"]["parse_status"] == "ready"
 
     list_resp = logged_in_client.get("/api/pdf-documents")
     assert list_resp.status_code == 200
-    assert any(
-        doc["id"] == document_id and doc["parse_status"] == PDF_PARSE_STATUS_READY
-        for doc in list_resp.get_json()["documents"]
-    )
+    assert any(doc["id"] == document_id for doc in list_resp.get_json()["documents"])
 
     detail_resp = logged_in_client.get(f"/api/pdf-documents/{document_id}")
     assert detail_resp.status_code == 200
     detail_data = detail_resp.get_json()
-    assert detail_data["document"]["parse_status"] == PDF_PARSE_STATUS_READY
-    assert detail_data["document"]["parse_progress"] == 100
     assert detail_data["document"]["page_count"] == 4
     assert len(detail_data["pages"]) == 4
     assert len(detail_data["sections"]) == 2
@@ -144,20 +105,11 @@ def test_pdf_workbench_upload_browse_and_excerpt(logged_in_client, monkeypatch):
 
 def test_pdf_workbench_upload_records_failed_status(logged_in_client, monkeypatch):
     from gtpweb.blueprints import pdf_workbench as pdf_workbench_blueprint
-    from gtpweb import pdf_workbench_tasks
 
-    def _raise_parse_error(_file_path, *, display_name="", progress_callback=None):
-        if progress_callback is not None:
-            progress_callback(36, "正在读取 PDF 页面")
+    def _raise_parse_error(_file_path, *, display_name=""):
         raise ValueError("未提取到可用文本")
 
-    monkeypatch.setattr(pdf_workbench_tasks, "parse_pdf_document", _raise_parse_error)
-
-    def _enqueue_inline(**kwargs):
-        pdf_workbench_tasks.run_pdf_parse_job(**kwargs)
-        return None
-
-    monkeypatch.setattr(pdf_workbench_blueprint, "enqueue_pdf_parse_job", _enqueue_inline)
+    monkeypatch.setattr(pdf_workbench_blueprint, "parse_pdf_document", _raise_parse_error)
 
     upload_resp = logged_in_client.post(
         "/api/pdf-documents",
@@ -165,14 +117,7 @@ def test_pdf_workbench_upload_records_failed_status(logged_in_client, monkeypatc
         content_type="multipart/form-data",
     )
 
-    assert upload_resp.status_code == 202
+    assert upload_resp.status_code == 400
     upload_data = upload_resp.get_json()
-    document_id = int(upload_data["document"]["id"])
-    assert upload_data["document"]["parse_status"] == PDF_PARSE_STATUS_PENDING
-
-    detail_resp = logged_in_client.get(f"/api/pdf-documents/{document_id}")
-    assert detail_resp.status_code == 200
-    detail_data = detail_resp.get_json()
-    assert detail_data["document"]["parse_status"] == PDF_PARSE_STATUS_FAILED
-    assert detail_data["document"]["parse_progress"] == 36
-    assert "未提取到可用文本" in detail_data["document"]["parse_error"]
+    assert upload_data["document"]["parse_status"] == PDF_PARSE_STATUS_FAILED
+    assert "未提取到可用文本" in upload_data["document"]["parse_error"]

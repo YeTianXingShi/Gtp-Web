@@ -347,6 +347,7 @@ def _stream_chat_response(
     runtime_settings: Any,
     openai_client: Any,
     google_client: Any,
+    enable_title_update: bool,
 ) -> Response:
     def generate() -> Any:
         assistant_parts: list[str] = []
@@ -553,7 +554,7 @@ def _stream_chat_response(
                     attachments=assistant_attachments,
                     status=stored_status,
                 )
-                if stored_status == "complete":
+                if stored_status == "complete" and enable_title_update:
                     updated_completion_messages = list(completion_messages)
                     updated_completion_messages.append({"role": "assistant", "content": stored_text})
                     _schedule_conversation_title_update(
@@ -884,6 +885,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,
+            enable_title_update=(existing_count == 0),
         )
 
     @bp.post("/api/chat/retry/stream")
@@ -1008,6 +1010,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,
+            enable_title_update=False,
         )
 
     return bp

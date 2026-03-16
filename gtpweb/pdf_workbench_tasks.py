@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import atexit
 import logging
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from gtpweb.pdf_workbench import (
 
 logger = logging.getLogger(__name__)
 
-_PDF_PARSE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pdf-workbench")
+_PDF_PARSE_EXECUTOR = ProcessPoolExecutor(max_workers=1)
 
 
 def _shutdown_executor() -> None:

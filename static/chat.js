@@ -687,6 +687,56 @@ function getModelConfig(modelId) {
   return MODEL_OPTION_MAP.get(String(modelId || "")) || null;
 }
 
+function getModelSettingOptionLabel(modelOption, key, optionValue) {
+  const value = String(optionValue || "").trim().toLowerCase();
+  if (!value) return "";
+
+  if (key === "reasoning_effort") {
+    const openAiLabels = {
+      minimal: "极简",
+      low: "低",
+      medium: "中",
+      high: "高",
+      xhigh: "超高",
+    };
+    return openAiLabels[value] || value;
+  }
+
+  if (key === "thinking_level" && modelOption?.provider === "google") {
+    const modelName = String(modelOption.name || "").toLowerCase();
+    const baseLabels = {
+      minimal: "极简",
+      low: "低",
+      medium: "中",
+      high: "高",
+      xhigh: "超高",
+    };
+
+    if (modelName.includes("gemini-3") && modelName.includes("pro")) {
+      if (value === "low") return "低";
+      if (value === "high") return "高";
+    }
+
+    if (modelName.includes("gemini-3") && modelName.includes("flash")) {
+      return baseLabels[value] || value;
+    }
+
+    return baseLabels[value] || value;
+  }
+
+  return value;
+}
+
+function buildModelSettingOptions(modelOption, key, rawOptions) {
+  return rawOptions
+    .map((item) => String(item || "").trim().toLowerCase())
+    .filter(Boolean)
+    .map((value) => ({
+      value,
+      label: getModelSettingOptionLabel(modelOption, key, value),
+    }));
+}
+
 function getModelSettingDescriptor(modelId) {
   const modelOption = getModelConfig(modelId);
   if (!modelOption) return null;
@@ -698,15 +748,17 @@ function getModelSettingDescriptor(modelId) {
     Array.isArray(reasoning.effort_options) &&
     reasoning.effort_options.length
   ) {
-    const options = reasoning.effort_options
-      .map((item) => String(item || "").trim().toLowerCase())
-      .filter(Boolean);
+    const options = buildModelSettingOptions(
+      modelOption,
+      "reasoning_effort",
+      reasoning.effort_options
+    );
     if (!options.length) return null;
     return {
       key: "reasoning_effort",
-      label: "Effort：",
+      label: "思考强度：",
       options,
-      defaultValue: String(reasoning.effort || options[0] || "")
+      defaultValue: String(reasoning.effort || options[0]?.value || "")
         .trim()
         .toLowerCase(),
     };
@@ -719,15 +771,17 @@ function getModelSettingDescriptor(modelId) {
     Array.isArray(thinking.level_options) &&
     thinking.level_options.length
   ) {
-    const options = thinking.level_options
-      .map((item) => String(item || "").trim().toLowerCase())
-      .filter(Boolean);
+    const options = buildModelSettingOptions(
+      modelOption,
+      "thinking_level",
+      thinking.level_options
+    );
     if (!options.length) return null;
     return {
       key: "thinking_level",
-      label: "Level：",
+      label: "思考等级：",
       options,
-      defaultValue: String(thinking.level || options[0] || "")
+      defaultValue: String(thinking.level || options[0]?.value || "")
         .trim()
         .toLowerCase(),
     };
@@ -739,13 +793,14 @@ function getModelSettingDescriptor(modelId) {
 function normalizeModelSettingValue(descriptor, rawValue) {
   if (!descriptor) return "";
   const normalized = String(rawValue || "").trim().toLowerCase();
-  if (descriptor.options.includes(normalized)) {
+  const optionValues = descriptor.options.map((item) => item.value);
+  if (optionValues.includes(normalized)) {
     return normalized;
   }
-  if (descriptor.options.includes(descriptor.defaultValue)) {
+  if (optionValues.includes(descriptor.defaultValue)) {
     return descriptor.defaultValue;
   }
-  return descriptor.options[0] || "";
+  return optionValues[0] || "";
 }
 
 function syncModelSettingControl(options = {}) {
@@ -777,10 +832,10 @@ function syncModelSettingControl(options = {}) {
 
   modelSettingLabelEl.textContent = descriptor.label;
   modelSettingSelectEl.innerHTML = "";
-  for (const optionValue of descriptor.options) {
+  for (const optionItem of descriptor.options) {
     const optionEl = document.createElement("option");
-    optionEl.value = optionValue;
-    optionEl.textContent = optionValue;
+    optionEl.value = optionItem.value;
+    optionEl.textContent = optionItem.label;
     modelSettingSelectEl.appendChild(optionEl);
   }
   modelSettingFieldEl.hidden = false;

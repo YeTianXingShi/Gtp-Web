@@ -13,7 +13,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, jsonify, redirect, render_template, request, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from gtpweb.ai_providers import build_model_groups, serialize_model_options
 from gtpweb.config import AppConfig
@@ -61,6 +62,13 @@ def _get_current_user(users_file: Path) -> str | None:
     return str(record["username"])
 
 
+def _build_magic_login_redirect(record: dict[str, Any]) -> str:
+    if record.get("is_admin"):
+        return "/admin"
+    return "/chat"
+
+
+
 def create_auth_blueprint(config: AppConfig) -> Blueprint:
     """
     创建认证蓝图
@@ -73,6 +81,7 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
     """
     bp = Blueprint("auth", __name__)
     users_file = config.users_file
+    magic_login_serializer = URLSafeTimedSerializer(config.magic_login_secret, salt="magic-login")
 
     @bp.get("/")
     def index() -> Any:
@@ -111,6 +120,46 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
             return redirect(url_for("auth.chat_page"))
         return render_template("login.html")
 
+    @bp.get("/login/magic")
+    def magic_login() -> Any:
+        token = str(request.args.get("token", "")).strip()
+        next_url = str(request.args.get("next", "")).strip()
+        if not token:
+            abort(400, description="缺少 token")
+
+        try:
+            payload = magic_login_serializer.loads(
+                token,
+                max_age=config.magic_login_default_max_age,
+            )
+        except SignatureExpired:
+            logger.warning("免登录失败: 链接已过期")
+            abort(401, description="免登录链接已过期")
+        except BadSignature:
+            logger.warning("免登录失败: token 无效")
+            abort(401, description="免登录链接无效")
+
+        if not isinstance(payload, dict):
+            abort(401, description="免登录链接无效")
+
+        username = str(payload.get("username", "")).strip()
+        if not username:
+            abort(401, description="免登录链接无效")
+
+        record = get_user_record(users_file, username)
+        if record is None:
+            logger.warning("免登录失败: 用户不存在 用户名=%s", username)
+            abort(404, description="用户不存在")
+
+        session.clear()
+        session.permanent = True
+        session["username"] = record["username"]
+        redirect_to = next_url or str(payload.get("next", "")).strip() or _build_magic_login_redirect(record)
+        if not redirect_to.startswith("/"):
+            redirect_to = _build_magic_login_redirect(record)
+        logger.info("免登录成功: 用户名=%s 管理员=%s", username, record["is_admin"])
+        return redirect(redirect_to)
+
     @bp.post("/api/login")
     def login() -> Any:
         """
@@ -146,7 +195,7 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
             {
                 "ok": True,
                 "is_admin": bool(user_record["is_admin"]),
-                "redirect_to": "/admin" if user_record["is_admin"] else "/chat",
+                "redirect_to": _build_magic_login_redirect(user_record),
             }
         )
 

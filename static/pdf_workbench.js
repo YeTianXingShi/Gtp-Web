@@ -5,10 +5,6 @@ const uploadForm = document.getElementById("pdf-upload-form");
 const uploadBtn = document.getElementById("pdf-upload-btn");
 const fileInputEl = document.getElementById("pdf-file-input");
 const uploadResultEl = document.getElementById("pdf-upload-result");
-const uploadProgressEl = document.getElementById("pdf-upload-progress");
-const uploadProgressBarEl = document.getElementById("pdf-upload-progress-bar");
-const uploadProgressLabelEl = document.getElementById("pdf-upload-progress-label");
-const uploadProgressValueEl = document.getElementById("pdf-upload-progress-value");
 const docListEl = document.getElementById("pdf-doc-list");
 const docTitleEl = document.getElementById("pdf-doc-title");
 const docStatusEl = document.getElementById("pdf-doc-status");
@@ -40,9 +36,6 @@ const state = {
   viewMode: "sections",
   uploading: false,
   pollTimer: null,
-  uploadProgress: 0,
-  uploadProgressPhase: "idle",
-  progressTimer: null,
 };
 
 function getErrorMessage(error) {
@@ -59,39 +52,6 @@ async function fetchJson(url, options = {}) {
     throw new Error(data.error || "请求失败");
   }
   return data;
-}
-
-function uploadPdfFile(file) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const formData = new FormData();
-    formData.append("file", file);
-
-    xhr.open("POST", "/api/pdf-documents");
-    xhr.responseType = "json";
-
-    xhr.upload.addEventListener("progress", (event) => {
-      if (!event.lengthComputable) {
-        return;
-      }
-      const ratio = event.total > 0 ? event.loaded / event.total : 0;
-      const progress = Math.min(75, Math.max(5, ratio * 75));
-      setUploadProgress(progress, "uploading");
-    });
-
-    xhr.addEventListener("load", () => {
-      const data = xhr.response && typeof xhr.response === "object" ? xhr.response : {};
-      if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
-        resolve(data);
-        return;
-      }
-      reject(new Error(data.error || "上传失败"));
-    });
-
-    xhr.addEventListener("error", () => reject(new Error("上传失败，网络连接异常")));
-    xhr.addEventListener("abort", () => reject(new Error("上传已取消")));
-    xhr.send(formData);
-  });
 }
 
 function escapeHtml(raw) {
@@ -120,71 +80,6 @@ function clearPollTimer() {
     window.clearTimeout(state.pollTimer);
     state.pollTimer = null;
   }
-}
-
-function clearProgressTimer() {
-  if (state.progressTimer != null) {
-    window.clearInterval(state.progressTimer);
-    state.progressTimer = null;
-  }
-}
-
-function renderUploadProgress() {
-  const visible = state.uploading || state.uploadProgressPhase === "error";
-  uploadProgressEl.hidden = !visible;
-  uploadProgressEl.classList.toggle("is-warning", state.uploadProgressPhase === "error");
-  uploadProgressBarEl.style.width = `${Math.max(0, Math.min(100, state.uploadProgress))}%`;
-  uploadProgressValueEl.textContent = `${Math.round(state.uploadProgress)}%`;
-
-  if (state.uploadProgressPhase === "uploading") {
-    uploadProgressLabelEl.textContent = "正在上传 PDF…";
-  } else if (state.uploadProgressPhase === "processing") {
-    uploadProgressLabelEl.textContent = "服务器正在解析 PDF…";
-  } else if (state.uploadProgressPhase === "done") {
-    uploadProgressLabelEl.textContent = "解析完成。";
-  } else if (state.uploadProgressPhase === "error") {
-    uploadProgressLabelEl.textContent = "上传或解析失败。";
-  } else {
-    uploadProgressLabelEl.textContent = "准备上传…";
-  }
-}
-
-function setUploadProgress(progress, phase) {
-  if (typeof phase === "string") {
-    state.uploadProgressPhase = phase;
-  }
-  if (Number.isFinite(progress)) {
-    state.uploadProgress = Math.max(0, Math.min(100, progress));
-  }
-  renderUploadProgress();
-}
-
-function startProcessingProgress() {
-  clearProgressTimer();
-  state.progressTimer = window.setInterval(() => {
-    if (!state.uploading || state.uploadProgressPhase !== "processing") {
-      clearProgressTimer();
-      return;
-    }
-    if (state.uploadProgress < 90) {
-      state.uploadProgress = Math.min(90, state.uploadProgress + 2);
-      renderUploadProgress();
-    }
-  }, 700);
-}
-
-function finishUploadProgress(success = true) {
-  clearProgressTimer();
-  if (success) {
-    setUploadProgress(100, "done");
-    window.setTimeout(() => {
-      if (!state.uploading) {
-        uploadProgressEl.hidden = true;
-      }
-    }, 1200);
-    return;
-  }
-  setUploadProgress(state.uploadProgress || 100, "error");
 }
 
 function schedulePollIfNeeded() {
@@ -341,17 +236,6 @@ function renderPages(pages) {
 }
 
 function renderDocumentMeta(document) {
-  if (state.uploading && document) {
-    if (document.parse_status === "ready") {
-      finishUploadProgress(true);
-    } else if (["pending", "processing"].includes(document.parse_status)) {
-      setUploadProgress(Math.max(state.uploadProgress, 80), "processing");
-      startProcessingProgress();
-    } else if (document.parse_status === "failed") {
-      finishUploadProgress(false);
-    }
-  }
-
   docTitleEl.textContent = document?.display_title || "请选择一个 PDF";
   if (!document) {
     docStatusEl.textContent = "上传后会在这里显示解析状态与摘要信息。";
@@ -528,23 +412,25 @@ uploadForm.addEventListener("submit", async (event) => {
     return;
   }
 
+  const formData = new FormData();
+  formData.append("file", file);
   state.uploading = true;
-  setUploadProgress(3, "uploading");
   syncActionButtons();
   setUploadResult("正在上传并解析 PDF，请稍候...");
   try {
-    const data = await uploadPdfFile(file);
-    setUploadProgress(78, "processing");
-    startProcessingProgress();
+    const resp = await fetch("/api/pdf-documents", { method: "POST", body: formData });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      setUploadResult(data.error || "上传失败", "is-warning");
+      await loadDocuments({ preserveSelection: true, refreshDetail: true, preferredId: data.document?.id || null });
+      return;
+    }
 
     fileInputEl.value = "";
-    setUploadResult("上传成功，PDF 解析完成。", "is-success");
-    finishUploadProgress(true);
+    setUploadResult("上传并解析完成。", "is-success");
     await loadDocuments({ preserveSelection: false, refreshDetail: true, preferredId: data.document.id });
   } catch (error) {
-    finishUploadProgress(false);
     setUploadResult(getErrorMessage(error), "is-warning");
-    await loadDocuments({ preserveSelection: true, refreshDetail: true });
   } finally {
     state.uploading = false;
     syncActionButtons();

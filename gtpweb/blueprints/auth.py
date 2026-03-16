@@ -13,7 +13,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, abort, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from gtpweb.ai_providers import build_model_groups, serialize_model_options
@@ -68,6 +68,79 @@ def _build_magic_login_redirect(record: dict[str, Any]) -> str:
     return "/chat"
 
 
+MAGIC_LOGIN_COOKIE_NAME = "magic_login_token"
+
+
+
+def _set_magic_login_cookie(response: Response, token: str, max_age: int) -> None:
+    response.set_cookie(
+        MAGIC_LOGIN_COOKIE_NAME,
+        token,
+        max_age=max_age,
+        httponly=True,
+        secure=bool(request.is_secure),
+        samesite="Lax",
+        path="/",
+    )
+
+
+
+def _clear_magic_login_cookie(response: Response) -> None:
+    response.delete_cookie(MAGIC_LOGIN_COOKIE_NAME, path="/")
+
+
+
+def _load_magic_login_payload(
+    serializer: URLSafeTimedSerializer,
+    token: str,
+    *,
+    max_age: int,
+) -> dict[str, Any] | None:
+    if not token:
+        return None
+    try:
+        payload = serializer.loads(token, max_age=max_age)
+    except SignatureExpired:
+        return None
+    except BadSignature:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+
+def _try_magic_cookie_login(
+    users_file: Path,
+    serializer: URLSafeTimedSerializer,
+    *,
+    max_age: int,
+) -> dict[str, Any] | None:
+    if session.get("username"):
+        return _get_current_user_record(users_file)
+
+    payload = _load_magic_login_payload(
+        serializer,
+        str(request.cookies.get(MAGIC_LOGIN_COOKIE_NAME, "")).strip(),
+        max_age=max_age,
+    )
+    if payload is None:
+        return None
+
+    username = str(payload.get("username", "")).strip()
+    if not username:
+        return None
+
+    record = get_user_record(users_file, username)
+    if record is None:
+        return None
+
+    session.clear()
+    session.permanent = True
+    session["username"] = record["username"]
+    return record
+
+
 
 def create_auth_blueprint(config: AppConfig) -> Blueprint:
     """
@@ -82,6 +155,19 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("auth", __name__)
     users_file = config.users_file
     magic_login_serializer = URLSafeTimedSerializer(config.magic_login_secret, salt="magic-login")
+    magic_login_max_age = max(60, int(config.magic_login_default_max_age))
+
+    @bp.after_app_request
+    def refresh_magic_login_cookie(response: Response) -> Response:
+        username = session.get("username")
+        if not isinstance(username, str) or not username:
+            return response
+        if not request.cookies.get(MAGIC_LOGIN_COOKIE_NAME):
+            return response
+        payload: dict[str, Any] = {"username": username}
+        refreshed_token = magic_login_serializer.dumps(payload)
+        _set_magic_login_cookie(response, refreshed_token, magic_login_max_age)
+        return response
 
     @bp.get("/")
     def index() -> Any:
@@ -96,7 +182,11 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         Returns:
             重定向响应
         """
-        record = _get_current_user_record(users_file)
+        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
+            users_file,
+            magic_login_serializer,
+            max_age=magic_login_max_age,
+        )
         if record is None:
             return redirect(url_for("auth.login_page"))
         if record["is_admin"]:
@@ -113,7 +203,11 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         Returns:
             登录页面 HTML 或重定向响应
         """
-        record = _get_current_user_record(users_file)
+        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
+            users_file,
+            magic_login_serializer,
+            max_age=magic_login_max_age,
+        )
         if record is not None:
             if record["is_admin"]:
                 return redirect(url_for("admin.admin_page"))
@@ -127,20 +221,14 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         if not token:
             abort(400, description="缺少 token")
 
-        try:
-            payload = magic_login_serializer.loads(
-                token,
-                max_age=config.magic_login_default_max_age,
-            )
-        except SignatureExpired:
-            logger.warning("免登录失败: 链接已过期")
-            abort(401, description="免登录链接已过期")
-        except BadSignature:
-            logger.warning("免登录失败: token 无效")
-            abort(401, description="免登录链接无效")
-
-        if not isinstance(payload, dict):
-            abort(401, description="免登录链接无效")
+        payload = _load_magic_login_payload(
+            magic_login_serializer,
+            token,
+            max_age=magic_login_max_age,
+        )
+        if payload is None:
+            logger.warning("免登录失败: token 无效或已过期")
+            abort(401, description="免登录链接无效或已过期")
 
         username = str(payload.get("username", "")).strip()
         if not username:
@@ -157,8 +245,11 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         redirect_to = next_url or str(payload.get("next", "")).strip() or _build_magic_login_redirect(record)
         if not redirect_to.startswith("/"):
             redirect_to = _build_magic_login_redirect(record)
+        refreshed_token = magic_login_serializer.dumps({"username": record["username"]})
+        response = redirect(redirect_to)
+        _set_magic_login_cookie(response, refreshed_token, magic_login_max_age)
         logger.info("免登录成功: 用户名=%s 管理员=%s", username, record["is_admin"])
-        return redirect(redirect_to)
+        return response
 
     @bp.post("/api/login")
     def login() -> Any:
@@ -212,7 +303,9 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         username = _get_current_user(users_file) or "<anonymous>"
         logger.info("退出登录: 用户名=%s", username)
         session.clear()
-        return jsonify({"ok": True})
+        response = jsonify({"ok": True})
+        _clear_magic_login_cookie(response)
+        return response
 
     @bp.get("/chat")
     def chat_page() -> Any:
@@ -225,7 +318,11 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         Returns:
             聊天页面 HTML 或重定向响应
         """
-        record = _get_current_user_record(users_file)
+        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
+            users_file,
+            magic_login_serializer,
+            max_age=magic_login_max_age,
+        )
         if record is None:
             return redirect(url_for("auth.login_page"))
 

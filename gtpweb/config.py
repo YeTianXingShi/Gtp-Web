@@ -793,7 +793,7 @@ def load_config() -> AppConfig:
     magic_login_secret = os.getenv("MAGIC_LOGIN_SECRET", "").strip() or os.getenv(
         "APP_SECRET_KEY", "dev-secret-change-me"
     )
-    magic_login_default_max_age = safe_int(os.getenv("MAGIC_LOGIN_DEFAULT_MAX_AGE", "3600")) or 3600
+    magic_login_default_max_age = safe_int(os.getenv("MAGIC_LOGIN_DEFAULT_MAX_AGE", "604800")) or 604800
 
     # OpenAI 配置
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip()

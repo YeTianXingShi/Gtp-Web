@@ -161,6 +161,8 @@ class AppConfig:
         upload_dir: 上传文件目录
         max_upload_mb: 最大上传文件大小（MB）
         max_upload_bytes: 最大上传文件大小（字节）
+        max_pdf_upload_mb: PDF 工作台最大上传大小（MB）
+        max_pdf_upload_bytes: PDF 工作台最大上传大小（字节）
         max_attachments_per_message: 每条消息最大附件数
         max_text_file_chars: 文本文件最大字符数
         allowed_attachment_exts: 允许的附件扩展名集合
@@ -193,6 +195,8 @@ class AppConfig:
     upload_dir: Path
     max_upload_mb: int
     max_upload_bytes: int
+    max_pdf_upload_mb: int
+    max_pdf_upload_bytes: int
     max_attachments_per_message: int
     max_text_file_chars: int
     allowed_attachment_exts: set[str]
@@ -806,6 +810,8 @@ def load_config() -> AppConfig:
     # 附件限制配置
     max_upload_mb = safe_int(os.getenv("MAX_UPLOAD_MB", "15")) or 15
     max_upload_bytes = max_upload_mb * 1024 * 1024
+    max_pdf_upload_mb = safe_int(os.getenv("MAX_PDF_UPLOAD_MB", "100")) or 100
+    max_pdf_upload_bytes = max_pdf_upload_mb * 1024 * 1024
     max_attachments_per_message = safe_int(os.getenv("MAX_ATTACHMENTS_PER_MESSAGE", "5")) or 5
     max_text_file_chars = safe_int(os.getenv("MAX_TEXT_FILE_CHARS", "12000")) or 12000
     allowed_attachment_exts = parse_allowed_attachment_exts(os.getenv("ALLOWED_ATTACHMENT_EXTS", ""))
@@ -855,6 +861,8 @@ def load_config() -> AppConfig:
         upload_dir=upload_dir,
         max_upload_mb=max_upload_mb,
         max_upload_bytes=max_upload_bytes,
+        max_pdf_upload_mb=max_pdf_upload_mb,
+        max_pdf_upload_bytes=max_pdf_upload_bytes,
         max_attachments_per_message=max_attachments_per_message,
         max_text_file_chars=max_text_file_chars,
         allowed_attachment_exts=allowed_attachment_exts,

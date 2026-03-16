@@ -76,7 +76,7 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
             "pdf_workbench.html",
             username=record["username"],
             is_admin=bool(record["is_admin"]),
-            max_upload_mb=runtime_settings.max_upload_mb,
+            max_upload_mb=runtime_settings.max_pdf_upload_mb,
             max_excerpt_chars=PDF_MAX_EXCERPT_CHARS,
         )
 
@@ -124,12 +124,12 @@ def create_pdf_workbench_blueprint(config: AppConfig) -> Blueprint:
         raw = uploaded_file.read()
         if not raw:
             return jsonify({"ok": False, "error": "上传文件为空"}), 400
-        if len(raw) > runtime_settings.max_upload_bytes:
+        if len(raw) > runtime_settings.max_pdf_upload_bytes:
             return (
                 jsonify(
                     {
                         "ok": False,
-                        "error": f"PDF 文件过大，当前上限为 {runtime_settings.max_upload_mb} MB",
+                        "error": f"PDF 文件过大，当前上限为 {runtime_settings.max_pdf_upload_mb} MB",
                     }
                 ),
                 400,

@@ -52,6 +52,8 @@ class RuntimeSettings:
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
     max_upload_bytes: int
+    max_pdf_upload_mb: int
+    max_pdf_upload_bytes: int
     max_attachments_per_message: int
     max_text_file_chars: int
     allowed_attachment_exts: set[str]
@@ -148,6 +150,7 @@ def build_runtime_settings(
     model_options = build_model_options(model_catalog.openai.models, model_catalog.google.models)
     models = [item.id for item in model_options]
     max_upload_mb = choose_int("MAX_UPLOAD_MB", base_config.max_upload_mb)
+    max_pdf_upload_mb = choose_int("MAX_PDF_UPLOAD_MB", base_config.max_pdf_upload_mb)
     max_attachments_per_message = choose_int(
         "MAX_ATTACHMENTS_PER_MESSAGE",
         base_config.max_attachments_per_message,
@@ -169,6 +172,8 @@ def build_runtime_settings(
         model_options=model_options,
         max_upload_mb=max_upload_mb,
         max_upload_bytes=max_upload_mb * 1024 * 1024,
+        max_pdf_upload_mb=max_pdf_upload_mb,
+        max_pdf_upload_bytes=max_pdf_upload_mb * 1024 * 1024,
         max_attachments_per_message=max_attachments_per_message,
         max_text_file_chars=max_text_file_chars,
         allowed_attachment_exts=allowed_attachment_exts,

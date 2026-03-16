@@ -5,6 +5,7 @@ const modelSelectEl = document.getElementById("model-select");
 const modelSettingFieldEl = document.getElementById("model-setting-field");
 const modelSettingLabelEl = document.getElementById("model-setting-label");
 const modelSettingSelectEl = document.getElementById("model-setting-select");
+const pdfWorkbenchBtn = document.getElementById("pdf-workbench-btn");
 const logoutBtn = document.getElementById("logout-btn");
 const adminBtn = document.getElementById("admin-btn");
 const sendBtn = document.getElementById("send-btn");
@@ -82,8 +83,24 @@ const MIME_TO_EXT = {
 const temporaryMessageObjectUrls = new Set();
 const STREAM_IDLE_TIMEOUT_MS = 30000;
 const STREAM_IDLE_TIMEOUT_SECONDS = Math.floor(STREAM_IDLE_TIMEOUT_MS / 1000);
+const PDF_WORKBENCH_DRAFT_STORAGE_KEY = "pdfWorkbenchPendingChatDraftV1";
 let pendingFileSeq = 0;
 const SUPPORTED_EXPORT_FORMATS = new Set(["json", "txt", "md"]);
+
+function consumePdfWorkbenchDraft() {
+  const raw = window.localStorage.getItem(PDF_WORKBENCH_DRAFT_STORAGE_KEY);
+  if (!raw) return null;
+  window.localStorage.removeItem(PDF_WORKBENCH_DRAFT_STORAGE_KEY);
+  try {
+    const payload = JSON.parse(raw);
+    if (!payload || typeof payload.text !== "string" || !payload.text.trim()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 function escapeHtml(raw) {
   return String(raw ?? "")
@@ -1765,6 +1782,10 @@ async function refreshConversationsAndMessages() {
 
 chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  await submitCurrentMessage();
+});
+
+async function submitCurrentMessage() {
   if (state.sending) return;
 
   const content = promptEl.value.trim();
@@ -1826,7 +1847,7 @@ chatForm.addEventListener("submit", async (event) => {
   } catch (err) {
     addMessage("system", `刷新会话列表失败：${getErrorMessage(err)}`);
   }
-});
+}
 
 modelSelectEl.addEventListener("change", async () => {
   const previousSelection = getConversationSelectionSnapshot();
@@ -2019,6 +2040,12 @@ if (adminBtn) {
   });
 }
 
+if (pdfWorkbenchBtn) {
+  pdfWorkbenchBtn.addEventListener("click", () => {
+    window.location.href = "/pdf-workbench";
+  });
+}
+
 logoutBtn.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" });
   window.location.href = "/login";
@@ -2032,6 +2059,7 @@ window.addEventListener("beforeunload", () => {
 });
 
 (async function init() {
+  const pendingPdfDraft = consumePdfWorkbenchDraft();
   if (ALLOWED_ATTACHMENT_EXTS.length) {
     fileInputEl.setAttribute("accept", ALLOWED_ATTACHMENT_EXTS.join(","));
   }
@@ -2040,7 +2068,11 @@ window.addEventListener("beforeunload", () => {
   renderSelectedFiles();
   try {
     await loadConversations();
-    if (!state.conversations.length) {
+    if (pendingPdfDraft) {
+      promptEl.value = pendingPdfDraft.text;
+      await createConversation();
+      await submitCurrentMessage();
+    } else if (!state.conversations.length) {
       await createConversation();
     } else {
       await loadMessages(state.currentConversationId);

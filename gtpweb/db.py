@@ -135,6 +135,74 @@ def init_db(db_file: Path) -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                original_file_name TEXT NOT NULL,
+                storage_path TEXT NOT NULL DEFAULT '',
+                display_title TEXT NOT NULL DEFAULT '',
+                parse_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (parse_status IN ('pending', 'processing', 'ready', 'failed')),
+                parse_error TEXT NOT NULL DEFAULT '',
+                parse_warning TEXT NOT NULL DEFAULT '',
+                section_source TEXT NOT NULL DEFAULT 'pages'
+                    CHECK (section_source IN ('outline', 'toc', 'pages')),
+                file_size_bytes INTEGER NOT NULL DEFAULT 0,
+                page_count INTEGER NOT NULL DEFAULT 0,
+                total_chars INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                parsed_at TEXT
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_pages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                page_number INTEGER NOT NULL,
+                text TEXT NOT NULL DEFAULT '',
+                char_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (document_id, page_number),
+                FOREIGN KEY (document_id) REFERENCES pdf_documents(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pdf_sections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                parent_id INTEGER,
+                title TEXT NOT NULL,
+                level INTEGER NOT NULL DEFAULT 1,
+                start_page INTEGER NOT NULL,
+                end_page INTEGER NOT NULL,
+                sort_index INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'outline' CHECK (source IN ('outline', 'toc')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (document_id) REFERENCES pdf_documents(id) ON DELETE CASCADE,
+                FOREIGN KEY (parent_id) REFERENCES pdf_sections(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_documents_username_updated ON pdf_documents (username, updated_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_pages_document_page ON pdf_pages (document_id, page_number ASC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pdf_sections_document_sort ON pdf_sections (document_id, sort_index ASC)"
+        )
+
         # 获取当前表结构，用于数据库迁移
         message_columns = {
             str(row["name"])

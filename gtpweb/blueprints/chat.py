@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 from typing import Any
@@ -66,6 +67,8 @@ from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
 logger = logging.getLogger(__name__)
+
+_TITLE_UPDATE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="title-update")
 
 
 def _build_openai_reasoning_config(
@@ -201,6 +204,39 @@ def _maybe_update_conversation_title(
         )
         conn.commit()
     logger.info("会话标题已自动更新: 会话ID=%s 标题=%s", conversation_id, title)
+
+
+
+def _schedule_conversation_title_update(
+    *,
+    db_file: Path,
+    conversation_id: int,
+    current_title: str,
+    completion_messages: list[dict[str, Any]],
+    selected_provider: str,
+    upstream_model: str,
+    openai_client: Any,
+    google_client: Any,
+) -> None:
+    if not is_default_conversation_title(current_title):
+        return
+
+    def runner() -> None:
+        try:
+            _maybe_update_conversation_title(
+                db_file=db_file,
+                conversation_id=conversation_id,
+                current_title=current_title,
+                completion_messages=[dict(item) for item in completion_messages],
+                selected_provider=selected_provider,
+                upstream_model=upstream_model,
+                openai_client=openai_client,
+                google_client=google_client,
+            )
+        except Exception:
+            logger.exception("异步更新会话标题失败: 会话ID=%s", conversation_id)
+
+    _TITLE_UPDATE_EXECUTOR.submit(runner)
 
 
 def _resolve_stream_target(
@@ -520,7 +556,7 @@ def _stream_chat_response(
                 if stored_status == "complete":
                     updated_completion_messages = list(completion_messages)
                     updated_completion_messages.append({"role": "assistant", "content": stored_text})
-                    _maybe_update_conversation_title(
+                    _schedule_conversation_title_update(
                         db_file=db_file,
                         conversation_id=conversation_id,
                         current_title=conversation_title,

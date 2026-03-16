@@ -525,7 +525,6 @@ def _parse_thinking_settings(
     # 从基础设置获取默认值
     default_include_thoughts = True if base_settings is None else base_settings.include_thoughts
     default_level = "" if base_settings is None else base_settings.level
-    default_budget = None if base_settings is None else base_settings.budget
     default_level_options = () if base_settings is None else base_settings.level_options
 
     # 处理禁用或简化配置
@@ -534,7 +533,6 @@ def _parse_thinking_settings(
             enabled=False,
             include_thoughts=default_include_thoughts,
             level=default_level,
-            budget=default_budget,
             level_options=default_level_options,
         )
     if raw_value is True:
@@ -552,11 +550,6 @@ def _parse_thinking_settings(
     if "level_options" in raw_value:
         level_options = _parse_text_options(raw_value.get("level_options"), context=f"{context}.level_options")
 
-    # 解析 budget 参数
-    budget = default_budget
-    if "budget" in raw_value:
-        budget = safe_int(raw_value.get("budget"))
-
     # 自动设置默认 level
     if not level and level_options:
         level = level_options[0]
@@ -573,7 +566,6 @@ def _parse_thinking_settings(
             default=default_include_thoughts,
         ),
         level=level,
-        budget=budget,
         level_options=level_options,
     )
 

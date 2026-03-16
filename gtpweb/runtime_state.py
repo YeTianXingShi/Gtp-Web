@@ -251,7 +251,6 @@ def _snapshot_model_config_keys(model_options: Iterable[ModelOption], provider: 
                     "enabled": option.google_thinking.enabled,
                     "include_thoughts": option.google_thinking.include_thoughts,
                     "level": option.google_thinking.level,
-                    "budget": option.google_thinking.budget,
                     "level_options": option.google_thinking.level_options,
                 }
             )

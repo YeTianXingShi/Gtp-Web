@@ -51,13 +51,11 @@ class GoogleThinkingSettings:
         enabled: 是否启用 Thinking
         include_thoughts: 是否包含思考过程
         level: Thinking 级别
-        budget: Thinking 预算（令牌数）
         level_options: 可用的级别选项列表
     """
     enabled: bool = True
     include_thoughts: bool = True
     level: str = ""
-    budget: int | None = None
     level_options: tuple[str, ...] = ()
 
 
@@ -490,11 +488,9 @@ def build_effective_google_thinking_settings(
     if thinking_settings is None:
         return None
     if conversation_settings.thinking_level:
-        budget = None if thinking_settings.level_options else thinking_settings.budget
         return replace(
             thinking_settings,
             level=conversation_settings.thinking_level,
-            budget=budget,
         )
     return thinking_settings
 
@@ -532,7 +528,6 @@ def serialize_model_option(model_option: ModelOption) -> dict[str, Any]:
             "enabled": model_option.google_thinking.enabled,
             "include_thoughts": model_option.google_thinking.include_thoughts,
             "level": model_option.google_thinking.level,
-            "budget": model_option.google_thinking.budget,
             "level_options": list(model_option.google_thinking.level_options),
         }
 
@@ -687,9 +682,7 @@ def build_google_generate_content_config(
 
     thinking_kwargs: dict[str, Any] = {"include_thoughts": thinking_settings.include_thoughts}
 
-    if thinking_settings.budget is not None:
-        thinking_kwargs["thinking_budget"] = thinking_settings.budget
-    elif thinking_settings.level:
+    if thinking_settings.level:
         thinking_kwargs["thinking_level"] = thinking_settings.level
 
     return types.GenerateContentConfig(

@@ -5,7 +5,7 @@
   // 1. 每个模型都可以独立配置自己的 reasoning / thinking。
   // 2. `enabled` 用来控制该模型是否启用思考能力。
   // 3. OpenAI 支持：`enabled`、`effort`、`effort_options`、`summary`
-  // 4. Google 支持：`enabled`、`include_thoughts`、`level`、`level_options`、`budget`
+  // 4. Google 支持：`enabled`、`include_thoughts`、`level`、`level_options`
   // 5. 兼容旧写法：把 `reasoning` / `thinking` 直接写成 false 或 null，依然表示关闭。
   "openai": {
     "image_model": "",

@@ -21,6 +21,14 @@ const searchInputEl = document.getElementById("search-input");
 const conversationListEl = document.getElementById("conversation-list");
 const fileInputEl = document.getElementById("file-input");
 const selectedFilesEl = document.getElementById("selected-files");
+const sidebarToggleBtn = document.getElementById("sidebar-toggle");
+const sidebarEl = document.querySelector(".sidebar");
+
+if (sidebarToggleBtn && sidebarEl) {
+  sidebarToggleBtn.addEventListener("click", () => {
+    sidebarEl.classList.toggle("is-open");
+  });
+}
 
 const state = {
   conversations: [],

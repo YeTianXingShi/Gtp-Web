@@ -3,12 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>后台管理 - AI Chat</title>
+    <title>后台管理 - AI 智能助手</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body class="admin-page">
     <header class="topbar">
-      <div>当前管理员：<strong>{{ username }}</strong></div>
+      <div class="topbar-brand">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="app-logo" onerror="this.style.display='none'" />
+        <span class="topbar-brand-name">后台管理</span>
+      </div>
       <div class="toolbar">
         <button id="chat-btn" class="btn-secondary" type="button">进入聊天</button>
         <button id="logout-btn" type="button">退出</button>

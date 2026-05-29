@@ -3,13 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>登录 - AI Chat</title>
+    <title>登录 - AI 智能助手</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body class="auth-page">
     <main class="auth-card">
-      <h1>AI Chat 登录</h1>
-      <p class="hint">使用预置账号登录</p>
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="auth-logo" onerror="this.style.display='none'" />
+      <h1>AI 智能助手</h1>
+      <p class="hint">使用账号密码登录</p>
       <form id="login-form">
         <label>
           <span>账号</span>

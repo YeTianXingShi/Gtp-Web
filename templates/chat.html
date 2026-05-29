@@ -3,12 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Chat</title>
+    <title>AI 智能助手</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
   </head>
   <body class="chat-page">
     <header class="topbar">
-      <div>当前用户：<strong>{{ username }}</strong></div>
+      <div class="topbar-brand">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="app-logo" onerror="this.style.display='none'" />
+        <span class="topbar-brand-name">{{ username }}</span>
+        <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="切换侧边栏">☰</button>
+      </div>
       <div class="toolbar">
         <label for="model-select">模型：</label>
         <select id="model-select">

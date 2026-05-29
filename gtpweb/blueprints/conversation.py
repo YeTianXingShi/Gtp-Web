@@ -812,4 +812,13 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             },
         )
 
+    @bp.get("/api/me/usage")
+    def my_usage() -> Response:
+        username = _get_current_user(users_file)
+        if not username:
+            return jsonify({"ok": False, "error": "请先登录"}), 401
+        from gtpweb.token_tracking import get_user_usage_summary
+        usage = get_user_usage_summary(db_file, username)
+        return jsonify({"ok": True, "usage": usage})
+
     return bp

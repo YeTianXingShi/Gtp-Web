@@ -2151,6 +2151,72 @@ if (docsBtn && docsModal) {
   });
 }
 
+// 我的用量
+const usageBtn = document.getElementById("usage-btn");
+const usageModal = document.getElementById("usage-modal");
+const usageModalClose = document.getElementById("usage-modal-close");
+const usageModalBody = document.getElementById("usage-modal-body");
+
+async function loadMyUsage() {
+  usageModalBody.textContent = "";
+  const loading = document.createElement("p");
+  loading.className = "muted";
+  loading.textContent = "加载中...";
+  usageModalBody.appendChild(loading);
+  try {
+    const resp = await fetch("/api/me/usage");
+    const data = await resp.json();
+    usageModalBody.textContent = "";
+    if (!data.ok || !data.usage || !data.usage.length) {
+      const empty = document.createElement("p");
+      empty.className = "muted";
+      empty.textContent = "暂无用量记录";
+      usageModalBody.appendChild(empty);
+      return;
+    }
+    const table = document.createElement("table");
+    table.className = "data-table";
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    for (const h of ["模型", "输入 Tokens", "输出 Tokens", "请求次数"]) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      headerRow.appendChild(th);
+    }
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+    const tbody = document.createElement("tbody");
+    for (const item of data.usage) {
+      const tr = document.createElement("tr");
+      for (const val of [item.model, item.input_tokens.toLocaleString(), item.output_tokens.toLocaleString(), item.request_count.toLocaleString()]) {
+        const td = document.createElement("td");
+        td.textContent = val;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    usageModalBody.appendChild(table);
+  } catch {
+    usageModalBody.textContent = "";
+    const err = document.createElement("p");
+    err.className = "muted";
+    err.textContent = "加载失败";
+    usageModalBody.appendChild(err);
+  }
+}
+
+if (usageBtn && usageModal) {
+  usageBtn.addEventListener("click", () => {
+    usageModal.hidden = false;
+    loadMyUsage();
+  });
+  usageModalClose.addEventListener("click", () => { usageModal.hidden = true; });
+  usageModal.addEventListener("click", (e) => {
+    if (e.target === usageModal) usageModal.hidden = true;
+  });
+}
+
 (async function init() {
   if (ALLOWED_ATTACHMENT_EXTS.length) {
     fileInputEl.setAttribute("accept", ALLOWED_ATTACHMENT_EXTS.join(","));

@@ -33,6 +33,7 @@
         {% endif %}
         <button id="docs-btn" class="btn-secondary" type="button">文档中心</button>
         <button id="tutorial-btn" class="btn-secondary" type="button">使用教程</button>
+        <button id="usage-btn" class="btn-secondary" type="button">我的用量</button>
         <button id="logout-btn" type="button">退出</button>
       </div>
     </header>
@@ -108,6 +109,18 @@
           <button id="docs-modal-close" class="modal-close" type="button">&times;</button>
         </div>
         <div id="docs-modal-body" class="modal-body">
+          <p class="muted">加载中...</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="usage-modal" class="modal-overlay" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>我的用量</h2>
+          <button id="usage-modal-close" class="modal-close" type="button">&times;</button>
+        </div>
+        <div id="usage-modal-body" class="modal-body">
           <p class="muted">加载中...</p>
         </div>
       </div>

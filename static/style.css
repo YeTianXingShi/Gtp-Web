@@ -522,6 +522,14 @@ label span {
   white-space: pre-wrap;
 }
 
+.message-usage {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .message-content > :first-child {
   margin-top: 0;
 }

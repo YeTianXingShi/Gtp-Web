@@ -65,6 +65,7 @@ from gtpweb.openai_stream import (
     sse_payload,
 )
 from gtpweb.runtime_state import get_runtime_state
+from gtpweb.token_tracking import record_token_usage
 from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
@@ -359,6 +360,8 @@ def _stream_chat_response(
         client_disconnected = False
         upstream_finished = False
         delta_count = 0
+        usage_input_tokens = 0
+        usage_output_tokens = 0
         started_at = time.perf_counter()
         logger.info(
             "开始调用上游模型: 会话ID=%s 来源=%s 模型=%s 上下文消息数=%s",
@@ -402,6 +405,15 @@ def _stream_chat_response(
                                 )
                             yield sse_payload({"type": "delta", "text": delta})
 
+                        evt_type = getattr(event_obj, "type", "") if not isinstance(event_obj, dict) else event_obj.get("type", "")
+                        if evt_type == "response.completed":
+                            resp_obj = getattr(event_obj, "response", None)
+                            if resp_obj is not None:
+                                usage_obj = getattr(resp_obj, "usage", None)
+                                if usage_obj is not None:
+                                    usage_input_tokens = getattr(usage_obj, "input_tokens", 0) or 0
+                                    usage_output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
+
                     if not assistant_parts and not has_error:
                         has_error = True
                         yield sse_payload(
@@ -415,6 +427,7 @@ def _stream_chat_response(
                         "model": upstream_model,
                         "messages": completion_messages,
                         "stream": True,
+                        "stream_options": {"include_usage": True},
                     }
                     stream = openai_client.chat.completions.create(**request_kwargs)
                     for event_obj in stream:
@@ -430,6 +443,11 @@ def _stream_chat_response(
                                     len("".join(assistant_parts)),
                                 )
                             yield sse_payload({"type": "delta", "text": delta})
+
+                        chunk_usage = getattr(event_obj, "usage", None)
+                        if chunk_usage is not None:
+                            usage_input_tokens = getattr(chunk_usage, "prompt_tokens", 0) or 0
+                            usage_output_tokens = getattr(chunk_usage, "completion_tokens", 0) or 0
 
                     if not assistant_parts and not has_error:
                         has_error = True
@@ -470,6 +488,11 @@ def _stream_chat_response(
                                 len("".join(assistant_parts)),
                             )
                         yield sse_payload({"type": "delta", "text": delta})
+
+                    usage_meta = getattr(event_obj, "usage_metadata", None)
+                    if usage_meta is not None:
+                        usage_input_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
+                        usage_output_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
 
                 if not assistant_parts and not has_error:
                     has_error = True
@@ -516,6 +539,16 @@ def _stream_chat_response(
                                                 len("".join(assistant_parts)),
                                             )
                                         yield sse_payload({"type": "delta", "text": delta})
+                        elif event_type == "message_delta":
+                            msg_usage = getattr(event, "usage", None)
+                            if msg_usage is not None:
+                                usage_output_tokens = getattr(msg_usage, "output_tokens", 0) or 0
+                        elif event_type == "message_start":
+                            msg_obj = getattr(event, "message", None)
+                            if msg_obj is not None:
+                                msg_usage = getattr(msg_obj, "usage", None)
+                                if msg_usage is not None:
+                                    usage_input_tokens = getattr(msg_usage, "input_tokens", 0) or 0
 
                 if not assistant_parts and not has_error:
                     has_error = True
@@ -538,6 +571,13 @@ def _stream_chat_response(
                 (time.perf_counter() - started_at) * 1000,
             )
             upstream_finished = True
+
+            if usage_input_tokens > 0 or usage_output_tokens > 0:
+                yield sse_payload({
+                    "type": "usage",
+                    "input_tokens": usage_input_tokens,
+                    "output_tokens": usage_output_tokens,
+                })
 
         except APIStatusError as exc:
             has_error = True
@@ -626,6 +666,21 @@ def _stream_chat_response(
                 )
                 if not client_disconnected:
                     yield sse_payload({"type": "done", "reply": stored_text})
+
+                if usage_input_tokens > 0 or usage_output_tokens > 0:
+                    try:
+                        record_token_usage(
+                            db_file,
+                            username=username,
+                            conversation_id=conversation_id,
+                            message_id=None,
+                            model=upstream_model,
+                            provider=selected_provider,
+                            input_tokens=usage_input_tokens,
+                            output_tokens=usage_output_tokens,
+                        )
+                    except Exception:
+                        logger.exception("记录 Token 用量失败: 会话ID=%s", conversation_id)
             else:
                 if (not has_error) and (not client_disconnected):
                     yield sse_payload({"type": "error", "error": "AI 服务返回空结果"})

@@ -1384,6 +1384,7 @@ async function streamReply({
   let sawDoneEvent = false;
   let shouldStopReading = false;
   let streamAbortReason = "";
+  let streamUsage = null;
 
   const clearIdleTimer = () => {
     if (idleTimer != null) {
@@ -1538,6 +1539,8 @@ async function streamReply({
           if (typeof event.reply === "string") {
             finalReply = event.reply;
           }
+        } else if (event.type === "usage") {
+          streamUsage = { input: event.input_tokens || 0, output: event.output_tokens || 0 };
         }
       });
       if (shouldStopReading) {
@@ -1571,6 +1574,8 @@ async function streamReply({
         if (typeof event.reply === "string") {
           finalReply = event.reply;
         }
+      } else if (event.type === "usage") {
+        streamUsage = { input: event.input_tokens || 0, output: event.output_tokens || 0 };
       }
     });
   }
@@ -1583,6 +1588,14 @@ async function streamReply({
   if (streamError) {
     throw buildStreamError(streamError, finalReply);
   }
+
+  if (streamUsage && assistantEl) {
+    const usageEl = document.createElement("div");
+    usageEl.className = "message-usage";
+    usageEl.textContent = `Tokens: ${streamUsage.input.toLocaleString()} 输入 / ${streamUsage.output.toLocaleString()} 输出`;
+    assistantEl.appendChild(usageEl);
+  }
+
   return finalReply;
 }
 

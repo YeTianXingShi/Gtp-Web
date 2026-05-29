@@ -135,6 +135,25 @@ def init_db(db_file: Path) -> None:
             """
         )
 
+        # 创建 Token 用量记录表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                conversation_id INTEGER,
+                message_id INTEGER,
+                model TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE SET NULL,
+                FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL
+            )
+            """
+        )
+
         # 获取当前表结构，用于数据库迁移
         message_columns = {
             str(row["name"])

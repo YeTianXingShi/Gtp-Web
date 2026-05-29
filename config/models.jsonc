@@ -77,8 +77,22 @@
     ]
   },
   "claude": {
-    // 配置 CLAUDE_API_KEY 后，在此添加模型即可启用 Claude：
-    // {"name": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4（智能平衡）"}
-    "models": []
+    // Claude 4.6 generation 起模型 ID 采用无日期后缀格式（pinned snapshot）。
+    // 当前 Claude 流式分支不消费 thinking/reasoning 字段，模型自行决定推理强度
+    // （Opus 4.7 默认 adaptive thinking；Opus 4.6 / Sonnet 4.6 支持 extended thinking）。
+    "models": [
+      {
+        "name": "claude-opus-4-7",
+        "label": "Claude Opus 4.7（旗舰，最强推理与代码）"
+      },
+      {
+        "name": "claude-opus-4-6",
+        "label": "Claude Opus 4.6（旗舰，深度思考）"
+      },
+      {
+        "name": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6（速度与智能平衡）"
+      }
+    ]
   }
 }

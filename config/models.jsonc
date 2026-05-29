@@ -78,20 +78,40 @@
   },
   "claude": {
     // Claude 4.6 generation 起模型 ID 采用无日期后缀格式（pinned snapshot）。
-    // 当前 Claude 流式分支不消费 thinking/reasoning 字段，模型自行决定推理强度
-    // （Opus 4.7 默认 adaptive thinking；Opus 4.6 / Sonnet 4.6 支持 extended thinking）。
+    // thinking 字段控制 Adaptive Thinking：
+    //   - enabled: 是否启用思考
+    //   - effort: 思考强度（low / medium / high；Opus 4.7 还支持 xhigh / max）
+    //   - include_thoughts: 是否返回思考摘要（对应 Anthropic 的 display 字段）
     "models": [
       {
         "name": "claude-opus-4-7",
-        "label": "Claude Opus 4.7（旗舰，最强推理与代码）"
+        "label": "Claude Opus 4.7（旗舰，最强推理与代码）",
+        "thinking": {
+          "enabled": true,
+          "include_thoughts": true,
+          "effort": "high",
+          "effort_options": ["low", "medium", "high", "xhigh", "max"]
+        }
       },
       {
         "name": "claude-opus-4-6",
-        "label": "Claude Opus 4.6（旗舰，深度思考）"
+        "label": "Claude Opus 4.6（旗舰，深度思考）",
+        "thinking": {
+          "enabled": true,
+          "include_thoughts": true,
+          "effort": "high",
+          "effort_options": ["low", "medium", "high", "max"]
+        }
       },
       {
         "name": "claude-sonnet-4-6",
-        "label": "Claude Sonnet 4.6（速度与智能平衡）"
+        "label": "Claude Sonnet 4.6（速度与智能平衡）",
+        "thinking": {
+          "enabled": true,
+          "include_thoughts": true,
+          "effort": "medium",
+          "effort_options": ["low", "medium", "high", "max"]
+        }
       }
     ]
   }

@@ -24,6 +24,7 @@ from .ai_providers import (
     PROVIDER_CLAUDE,
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
+    ClaudeThinkingSettings,
     GoogleThinkingSettings,
     ModelOption,
     OpenAIReasoningSettings,
@@ -558,6 +559,62 @@ def _parse_thinking_settings(
     )
 
 
+def _parse_claude_thinking_settings(
+    raw_value: Any,
+    *,
+    context: str,
+    base_settings: ClaudeThinkingSettings | None = None,
+) -> ClaudeThinkingSettings:
+    """
+    解析 Claude Adaptive Thinking 设置
+
+    Args:
+        raw_value: 待解析的值（可以是 true/false/对象/null）
+        context: 错误信息上下文
+        base_settings: 基础设置（用于继承默认值）
+    """
+    default_effort = "" if base_settings is None else base_settings.effort
+    default_effort_options = () if base_settings is None else base_settings.effort_options
+    default_include_thoughts = True if base_settings is None else base_settings.include_thoughts
+
+    if raw_value is None or raw_value is False:
+        return ClaudeThinkingSettings(
+            enabled=False,
+            effort=default_effort,
+            effort_options=default_effort_options,
+            include_thoughts=default_include_thoughts,
+        )
+    if raw_value is True:
+        raw_value = {}
+    if not isinstance(raw_value, dict):
+        raise ValueError(f"{context} 必须是对象、true/false 或 null")
+
+    effort = default_effort
+    if "effort" in raw_value:
+        effort = _parse_optional_text(raw_value.get("effort"), context=f"{context}.effort", lowercase=True)
+
+    effort_options = default_effort_options
+    if "effort_options" in raw_value:
+        effort_options = _parse_text_options(raw_value.get("effort_options"), context=f"{context}.effort_options")
+
+    if not effort and effort_options:
+        effort = effort_options[0]
+
+    if effort and effort_options and effort not in effort_options:
+        raise ValueError(f"{context}.effort 必须在 effort_options 中")
+
+    return ClaudeThinkingSettings(
+        enabled=_parse_json_bool(raw_value.get("enabled"), context=f"{context}.enabled", default=True),
+        effort=effort,
+        effort_options=effort_options,
+        include_thoughts=_parse_json_bool(
+            raw_value.get("include_thoughts"),
+            context=f"{context}.include_thoughts",
+            default=default_include_thoughts,
+        ),
+    )
+
+
 def _parse_provider_model(
     provider: str,
     raw_item: Any,
@@ -565,16 +622,18 @@ def _parse_provider_model(
     index: int,
     default_reasoning: OpenAIReasoningSettings | None,
     default_thinking: GoogleThinkingSettings | None,
+    default_claude_thinking: ClaudeThinkingSettings | None = None,
 ) -> ProviderModelConfig:
     """
     解析单个提供商的模型配置
 
     Args:
-        provider: 提供商名称 (openai/google)
+        provider: 提供商名称 (openai/google/claude)
         raw_item: 原始配置（可以是字符串或对象）
         index: 模型在列表中的索引
         default_reasoning: 默认 OpenAI 推理设置
         default_thinking: 默认 Google Thinking 设置
+        default_claude_thinking: 默认 Claude Thinking 设置
 
     Returns:
         解析后的模型配置
@@ -605,6 +664,7 @@ def _parse_provider_model(
     # 初始化推理/Thinking 设置
     openai_reasoning = default_reasoning
     google_thinking = default_thinking
+    claude_thinking = default_claude_thinking
 
     # 解析 OpenAI 特定的 reasoning 设置
     if provider == PROVIDER_OPENAI and isinstance(raw_item, dict):
@@ -626,11 +686,22 @@ def _parse_provider_model(
                 base_settings=default_thinking,
             )
 
+    # 解析 Claude 特定的 thinking 设置
+    if provider == PROVIDER_CLAUDE and isinstance(raw_item, dict):
+        raw_thinking = raw_data.get("thinking", MISSING)
+        if raw_thinking is not MISSING:
+            claude_thinking = _parse_claude_thinking_settings(
+                raw_thinking,
+                context=f"{context}.thinking",
+                base_settings=default_claude_thinking,
+            )
+
     return ProviderModelConfig(
         name=model_name,
         label=label,
         openai_reasoning=openai_reasoning if provider == PROVIDER_OPENAI else None,
         google_thinking=google_thinking if provider == PROVIDER_GOOGLE else None,
+        claude_thinking=claude_thinking if provider == PROVIDER_CLAUDE else None,
     )
 
 
@@ -655,6 +726,7 @@ def _parse_provider_catalog(provider: str, raw_provider: Any) -> ProviderModelCa
     # 解析默认推理/Thinking 设置
     default_reasoning: OpenAIReasoningSettings | None = None
     default_thinking: GoogleThinkingSettings | None = None
+    default_claude_thinking: ClaudeThinkingSettings | None = None
 
     if provider == PROVIDER_OPENAI and "reasoning" in defaults:
         default_reasoning = _parse_reasoning_settings(
@@ -664,6 +736,12 @@ def _parse_provider_catalog(provider: str, raw_provider: Any) -> ProviderModelCa
 
     if provider == PROVIDER_GOOGLE and "thinking" in defaults:
         default_thinking = _parse_thinking_settings(
+            defaults.get("thinking"),
+            context=f"{provider}.defaults.thinking",
+        )
+
+    if provider == PROVIDER_CLAUDE and "thinking" in defaults:
+        default_claude_thinking = _parse_claude_thinking_settings(
             defaults.get("thinking"),
             context=f"{provider}.defaults.thinking",
         )
@@ -680,6 +758,7 @@ def _parse_provider_catalog(provider: str, raw_provider: Any) -> ProviderModelCa
             index=index,
             default_reasoning=default_reasoning,
             default_thinking=default_thinking,
+            default_claude_thinking=default_claude_thinking,
         )
         for index, item in enumerate(raw_models, start=1)
     )

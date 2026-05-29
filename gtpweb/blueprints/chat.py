@@ -27,6 +27,7 @@ from gtpweb.ai_providers import (
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
     build_claude_messages,
+    build_effective_claude_thinking_settings,
     build_effective_google_thinking_settings,
     build_effective_openai_reasoning_settings,
     build_google_generate_content_config,
@@ -299,6 +300,10 @@ def _resolve_stream_target(
             model_option,
             conversation_settings,
         ),
+        "effective_claude_thinking": build_effective_claude_thinking_settings(
+            model_option,
+            conversation_settings,
+        ),
     }
 
 
@@ -346,6 +351,7 @@ def _stream_chat_response(
     upstream_model: str,
     effective_openai_reasoning: Any,
     effective_google_thinking: Any,
+    effective_claude_thinking: Any,
     runtime_settings: Any,
     openai_client: Any,
     google_client: Any,
@@ -509,11 +515,20 @@ def _stream_chat_response(
                     "model": upstream_model,
                     "messages": claude_msgs,
                     "max_tokens": 16384,
-                    "stream": True,
                 }
                 if system_prompt:
                     request_kwargs["system"] = system_prompt
-                with claude_client.messages.stream(**{k: v for k, v in request_kwargs.items() if k != "stream"}) as stream:
+
+                # 注入 Adaptive Thinking 配置
+                if effective_claude_thinking is not None and effective_claude_thinking.enabled:
+                    thinking_param: dict[str, Any] = {"type": "adaptive"}
+                    # display 控制是否返回思考摘要
+                    thinking_param["display"] = "summarized" if effective_claude_thinking.include_thoughts else "omitted"
+                    request_kwargs["thinking"] = thinking_param
+                    if effective_claude_thinking.effort:
+                        request_kwargs["output_config"] = {"effort": effective_claude_thinking.effort}
+
+                with claude_client.messages.stream(**request_kwargs) as stream:
                     for event in stream:
                         event_type = getattr(event, "type", "")
                         if event_type == "content_block_delta":
@@ -997,6 +1012,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             upstream_model=stream_target["upstream_model"],
             effective_openai_reasoning=stream_target["effective_openai_reasoning"],
             effective_google_thinking=stream_target["effective_google_thinking"],
+            effective_claude_thinking=stream_target["effective_claude_thinking"],
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,
@@ -1151,6 +1167,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             upstream_model=stream_target["upstream_model"],
             effective_openai_reasoning=stream_target["effective_openai_reasoning"],
             effective_google_thinking=stream_target["effective_google_thinking"],
+            effective_claude_thinking=stream_target["effective_claude_thinking"],
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,

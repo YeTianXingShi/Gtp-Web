@@ -756,7 +756,7 @@ function getModelSettingDescriptor(modelId) {
 
   const reasoning = modelOption.reasoning;
   if (
-    modelOption.provider === "openai" &&
+    (modelOption.provider === "openai" || modelOption.provider === "claude") &&
     reasoning?.enabled &&
     Array.isArray(reasoning.effort_options) &&
     reasoning.effort_options.length

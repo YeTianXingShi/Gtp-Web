@@ -62,6 +62,23 @@ class GoogleThinkingSettings:
 
 
 @dataclass(frozen=True)
+class ClaudeThinkingSettings:
+    """
+    Anthropic Claude Adaptive Thinking 设置
+
+    Attributes:
+        enabled: 是否启用思考（False 时不传 thinking 参数）
+        effort: 思考强度（low / medium / high；Opus 4.7+ 支持 xhigh / max）
+        effort_options: 可用的强度选项列表
+        include_thoughts: 是否返回思考摘要（对应 Anthropic 的 display 字段）
+    """
+    enabled: bool = True
+    effort: str = ""
+    effort_options: tuple[str, ...] = ()
+    include_thoughts: bool = True
+
+
+@dataclass(frozen=True)
 class ConversationModelSettings:
     """
     对话级别的模型设置
@@ -69,7 +86,7 @@ class ConversationModelSettings:
     这些设置可以覆盖模型的默认设置。
 
     Attributes:
-        reasoning_effort: OpenAI 推理强度（覆盖默认值）
+        reasoning_effort: OpenAI 推理强度 / Claude 思考强度（覆盖默认值）
         thinking_level: Google Thinking 级别（覆盖默认值）
     """
     reasoning_effort: str = ""
@@ -86,11 +103,13 @@ class ProviderModelConfig:
         label: 模型显示标签
         openai_reasoning: OpenAI 特定的推理设置
         google_thinking: Google 特定的 Thinking 设置
+        claude_thinking: Claude 特定的 Thinking 设置
     """
     name: str
     label: str
     openai_reasoning: OpenAIReasoningSettings | None = None
     google_thinking: GoogleThinkingSettings | None = None
+    claude_thinking: ClaudeThinkingSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +125,7 @@ class ModelOption:
         group_label: 分组标签（提供商名称）
         openai_reasoning: OpenAI 推理设置
         google_thinking: Google Thinking 设置
+        claude_thinking: Claude Thinking 设置
     """
     id: str
     provider: str
@@ -114,6 +134,7 @@ class ModelOption:
     group_label: str
     openai_reasoning: OpenAIReasoningSettings | None = None
     google_thinking: GoogleThinkingSettings | None = None
+    claude_thinking: ClaudeThinkingSettings | None = None
 
 
 @dataclass(frozen=True)
@@ -186,6 +207,7 @@ def build_model_option(provider: str, model_config: ProviderModelConfig) -> Mode
         group_label=group_label,
         openai_reasoning=model_config.openai_reasoning,
         google_thinking=model_config.google_thinking,
+        claude_thinking=model_config.claude_thinking,
     )
 
 
@@ -446,6 +468,24 @@ def resolve_conversation_model_settings(
             ),
         )
 
+    # 处理 Claude Adaptive Thinking 设置（复用 reasoning_effort 字段，语义与 OpenAI 一致）
+    if model_option.provider == PROVIDER_CLAUDE:
+        claude_settings = model_option.claude_thinking
+        if claude_settings is None or not claude_settings.enabled:
+            if _normalize_choice_value(reasoning_effort) and strict:
+                raise ValueError("当前模型不支持切换 effort")
+            return ConversationModelSettings()
+        return ConversationModelSettings(
+            reasoning_effort=_resolve_selectable_value(
+                requested_value=reasoning_effort,
+                default_value=claude_settings.effort,
+                selectable_values=claude_settings.effort_options,
+                unsupported_message="当前模型不支持切换 effort",
+                invalid_message="无效的 effort",
+                strict=strict,
+            ),
+        )
+
     return ConversationModelSettings()
 
 
@@ -500,6 +540,26 @@ def build_effective_google_thinking_settings(
     return thinking_settings
 
 
+def build_effective_claude_thinking_settings(
+    model_option: ModelOption,
+    conversation_settings: ConversationModelSettings,
+) -> ClaudeThinkingSettings | None:
+    """
+    构建有效的 Claude Thinking 设置
+
+    将对话设置与模型默认设置合并（Claude 复用 reasoning_effort 字段）。
+    """
+    claude_settings = model_option.claude_thinking
+    if claude_settings is None:
+        return None
+    if conversation_settings.reasoning_effort:
+        return replace(
+            claude_settings,
+            effort=conversation_settings.reasoning_effort,
+        )
+    return claude_settings
+
+
 def serialize_model_option(model_option: ModelOption) -> dict[str, Any]:
     """
     序列化模型选项为字典
@@ -534,6 +594,15 @@ def serialize_model_option(model_option: ModelOption) -> dict[str, Any]:
             "include_thoughts": model_option.google_thinking.include_thoughts,
             "level": model_option.google_thinking.level,
             "level_options": list(model_option.google_thinking.level_options),
+        }
+
+    # 序列化 Claude Thinking 设置（前端复用 reasoning 字段以共享 effort UI）
+    if model_option.claude_thinking is not None:
+        item["reasoning"] = {
+            "enabled": model_option.claude_thinking.enabled,
+            "effort": model_option.claude_thinking.effort,
+            "summary": "summarized" if model_option.claude_thinking.include_thoughts else "omitted",
+            "effort_options": list(model_option.claude_thinking.effort_options),
         }
 
     return item

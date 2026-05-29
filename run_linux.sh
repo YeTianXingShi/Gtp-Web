@@ -8,8 +8,8 @@ set -euo pipefail
 # - Starts app in background
 #
 # NOTE:
-# - This script does NOT initialize or modify config files.
-# - Ensure config/env/*.env and config/users.json already exist before running.
+# - If config/env/ or config/users.json are missing, they will be auto-created
+#   from config/env.example/ and config/users.example.json respectively.
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_DIR="${ENV_DIR:-${PROJECT_DIR}/config/env}"
@@ -121,15 +121,28 @@ if ! python3 -m venv --help >/dev/null 2>&1; then
 fi
 
 echo "[2/5] Checking required config files..."
+EXAMPLE_ENV_DIR="${PROJECT_DIR}/config/env.example"
+EXAMPLE_USERS_FILE="${PROJECT_DIR}/config/users.example.json"
+
 if ! has_grouped_env; then
-  echo "Error: missing ${ENV_DIR}/*.env" >&2
-  echo "Please prepare grouped env files first, then rerun." >&2
-  exit 1
+  if [[ -d "${EXAMPLE_ENV_DIR}" ]]; then
+    echo "Config not found. Initializing from env.example..."
+    cp -R "${EXAMPLE_ENV_DIR}" "${ENV_DIR}"
+    echo "Created ${ENV_DIR}/ — please edit the .env files to set your API keys."
+  else
+    echo "Error: missing ${ENV_DIR}/*.env and no ${EXAMPLE_ENV_DIR}/ template found." >&2
+    exit 1
+  fi
 fi
 if [[ ! -f "${USERS_FILE}" ]]; then
-  echo "Error: missing ${USERS_FILE}" >&2
-  echo "Please prepare users config first, then rerun." >&2
-  exit 1
+  if [[ -f "${EXAMPLE_USERS_FILE}" ]]; then
+    echo "Users config not found. Initializing from users.example.json..."
+    cp "${EXAMPLE_USERS_FILE}" "${USERS_FILE}"
+    echo "Created ${USERS_FILE} — please edit it to configure your users."
+  else
+    echo "Error: missing ${USERS_FILE} and no ${EXAMPLE_USERS_FILE} template found." >&2
+    exit 1
+  fi
 fi
 
 echo "[3/5] Creating virtual environment..."

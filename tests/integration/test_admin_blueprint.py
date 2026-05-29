@@ -25,8 +25,8 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert page_resp.status_code == 200
     page_text = page_resp.get_data(as_text=True)
     assert "配置文件管理" in page_text
-    assert "用户管理" not in page_text
-    assert "create-user-form" not in page_text
+    assert "账号管理" in page_text
+    assert "create-user-form" in page_text
 
     files_resp = admin_client.get("/api/admin/config-files")
     assert files_resp.status_code == 200

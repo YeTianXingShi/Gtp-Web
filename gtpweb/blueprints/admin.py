@@ -6,20 +6,37 @@
 - 配置文件管理（用户配置、模型配置、环境变量）
 - 配置文件编辑和保存
 - 热更新配置
+- 用户管理 API
+- Token 用量查询
+- 审计日志
+- 仪表盘统计
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for
 
+from gtpweb.audit import log_audit, query_audit_logs
 from gtpweb.config import AppConfig, ENV_GROUP_SPECS, parse_model_catalog_text
 from gtpweb.runtime_state import apply_runtime_config_values, read_env_files_values
-from gtpweb.user_store import get_user_record, normalize_users_config, save_users_config, users_config_to_text
+from gtpweb.token_tracking import get_all_users_usage, get_user_usage_summary
+from gtpweb.user_store import (
+    create_user,
+    delete_user,
+    get_user_record,
+    list_users,
+    load_users_config,
+    normalize_users_config,
+    save_users_config,
+    update_user,
+    users_config_to_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,5 +326,214 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
                 "content": content,
             }
         )
+
+    # ── Dashboard ──────────────────────────────────────────────
+
+    @bp.get("/api/admin/dashboard")
+    def dashboard_stats() -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        from gtpweb.db import open_db_connection
+
+        db_file = config.db_file
+        today = date.today().isoformat()
+        with open_db_connection(db_file) as conn:
+            conversation_count = conn.execute("SELECT COUNT(*) AS cnt FROM conversations").fetchone()["cnt"]
+            user_count = conn.execute("SELECT COUNT(DISTINCT username) AS cnt FROM conversations").fetchone()["cnt"]
+            today_tokens = conn.execute(
+                "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS total FROM token_usage WHERE created_at >= ?",
+                (today,),
+            ).fetchone()["total"]
+            document_count = conn.execute("SELECT COUNT(*) AS cnt FROM documents").fetchone()["cnt"]
+
+        return jsonify(
+            {
+                "ok": True,
+                "conversation_count": conversation_count,
+                "user_count": user_count,
+                "today_tokens": today_tokens,
+                "document_count": document_count,
+            }
+        )
+
+    # ── User Management ────────────────────────────────────────
+
+    @bp.get("/api/admin/users")
+    def list_admin_users() -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        return jsonify({"ok": True, "users": list_users(users_file)})
+
+    @bp.post("/api/admin/users")
+    def create_admin_user() -> Any:
+        current_record, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        payload = request.get_json(silent=True) or {}
+        username = payload.get("username", "")
+        password = payload.get("password", "")
+        is_admin = payload.get("is_admin", False)
+
+        try:
+            result = create_user(users_file, username, password, is_admin)
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        log_audit(
+            config.db_file,
+            username=current_record["username"],
+            action="create_user",
+            target_type="user",
+            target_id=username,
+            detail=f"is_admin={is_admin}",
+            ip_address=request.remote_addr or "",
+        )
+        return jsonify({"ok": True, "user": result}), 201
+
+    @bp.route("/api/admin/users/<username>", methods=["PATCH"])
+    def update_admin_user(username: str) -> Any:
+        current_record, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        payload = request.get_json(silent=True) or {}
+        password = payload.get("password")
+        is_admin = payload.get("is_admin")
+        enabled = payload.get("enabled")
+        api_keys = payload.get("api_keys")
+
+        changes: list[str] = []
+
+        # Handle password and is_admin via user_store.update_user
+        if password is not None or is_admin is not None:
+            try:
+                update_user(
+                    users_file,
+                    username,
+                    password=password,
+                    is_admin=is_admin,
+                    current_username=current_record["username"],
+                )
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+            if password is not None:
+                changes.append("password")
+            if is_admin is not None:
+                changes.append(f"is_admin={is_admin}")
+
+        # Handle enabled and api_keys by directly modifying users config
+        if enabled is not None or api_keys is not None:
+            try:
+                cfg = load_users_config(users_file)
+            except (FileNotFoundError, ValueError) as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+
+            target = None
+            for record in cfg["users"]:
+                if record["username"] == username:
+                    target = record
+                    break
+            if target is None:
+                return jsonify({"ok": False, "error": "用户不存在"}), 404
+
+            if enabled is not None:
+                target["enabled"] = bool(enabled)
+                changes.append(f"enabled={enabled}")
+            if api_keys is not None:
+                if not isinstance(api_keys, dict):
+                    return jsonify({"ok": False, "error": "api_keys 必须是对象"}), 400
+                target["api_keys"] = {str(k): str(v) for k, v in api_keys.items() if v}
+                changes.append("api_keys")
+
+            try:
+                save_users_config(users_file, cfg, require_admin=True)
+            except ValueError as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 400
+
+        log_audit(
+            config.db_file,
+            username=current_record["username"],
+            action="update_user",
+            target_type="user",
+            target_id=username,
+            detail=", ".join(changes) if changes else "no changes",
+            ip_address=request.remote_addr or "",
+        )
+        return jsonify({"ok": True, "username": username, "changes": changes})
+
+    @bp.delete("/api/admin/users/<username>")
+    def delete_admin_user(username: str) -> Any:
+        current_record, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        try:
+            delete_user(users_file, username, current_username=current_record["username"])
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        log_audit(
+            config.db_file,
+            username=current_record["username"],
+            action="delete_user",
+            target_type="user",
+            target_id=username,
+            ip_address=request.remote_addr or "",
+        )
+        return jsonify({"ok": True})
+
+    # ── Token Usage ────────────────────────────────────────────
+
+    @bp.get("/api/admin/token-usage")
+    def admin_token_usage() -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        db_file = config.db_file
+        range_param = request.args.get("range", "today")
+        username_param = request.args.get("username")
+
+        today = date.today()
+        if range_param == "week":
+            start_date = (today - timedelta(days=7)).isoformat()
+        elif range_param == "month":
+            start_date = (today - timedelta(days=30)).isoformat()
+        else:
+            start_date = today.isoformat()
+
+        if username_param:
+            data = get_user_usage_summary(db_file, username_param, start_date=start_date)
+        else:
+            data = get_all_users_usage(db_file, start_date=start_date)
+
+        return jsonify({"ok": True, "range": range_param, "usage": data})
+
+    # ── Audit Logs ─────────────────────────────────────────────
+
+    @bp.get("/api/admin/audit-logs")
+    def admin_audit_logs() -> Any:
+        _, error_response = _require_admin_api(users_file)
+        if error_response is not None:
+            return error_response
+
+        username_param = request.args.get("username")
+        action_param = request.args.get("action")
+        limit = min(int(request.args.get("limit", 100)), 500)
+        offset = int(request.args.get("offset", 0))
+
+        logs = query_audit_logs(
+            config.db_file,
+            username=username_param,
+            action=action_param,
+            limit=limit,
+            offset=offset,
+        )
+        return jsonify({"ok": True, "logs": logs})
 
     return bp

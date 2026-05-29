@@ -30,6 +30,11 @@ if (sidebarToggleBtn && sidebarEl) {
   });
 }
 
+const tutorialBtn = document.getElementById("tutorial-btn");
+if (tutorialBtn) {
+  tutorialBtn.addEventListener("click", () => { window.location.href = "/tutorial"; });
+}
+
 const state = {
   conversations: [],
   currentConversationId: null,

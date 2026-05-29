@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>使用教程 - AI 智能助手</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body class="admin-page">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="app-logo" onerror="this.style.display='none'" />
+        <span class="topbar-brand-name">使用教程</span>
+      </div>
+      <div class="toolbar">
+        <button id="chat-btn" class="btn-secondary" type="button">返回聊天</button>
+      </div>
+    </header>
+    <main class="admin-shell">
+      <article class="admin-panel tutorial-content">
+        {{ content | safe }}
+      </article>
+    </main>
+    <script>
+      document.getElementById("chat-btn").addEventListener("click", () => {
+        window.location.href = "/chat";
+      });
+    </script>
+  </body>
+</html>

@@ -1543,6 +1543,52 @@ label span {
   color: var(--muted);
 }
 
+.tutorial-content {
+  line-height: 1.7;
+  font-size: 15px;
+}
+
+.tutorial-content h1,
+.tutorial-content h2,
+.tutorial-content h3 {
+  margin: 1.2em 0 0.6em;
+  color: var(--text);
+}
+
+.tutorial-content h1 { font-size: 1.5em; }
+.tutorial-content h2 { font-size: 1.25em; border-bottom: 1px solid var(--line); padding-bottom: 0.3em; }
+.tutorial-content h3 { font-size: 1.1em; }
+
+.tutorial-content p { margin: 0.6em 0; }
+
+.tutorial-content ul,
+.tutorial-content ol { padding-left: 1.5em; }
+
+.tutorial-content li { margin: 0.3em 0; }
+
+.tutorial-content blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid var(--accent);
+  background: var(--bg-2);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+}
+
+.tutorial-content code {
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--bg-0);
+  border: 1px solid var(--line);
+  font-size: 0.9em;
+}
+
+.tutorial-content hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.5em 0;
+}
+
 @media (max-width: 680px) {
   .modal-content {
     width: 100%;

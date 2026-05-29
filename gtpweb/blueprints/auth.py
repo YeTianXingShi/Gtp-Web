@@ -341,4 +341,20 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
             allowed_attachment_exts=sorted(runtime_settings.allowed_attachment_exts),
         )
 
+    @bp.get("/tutorial")
+    def tutorial_page() -> Any:
+        user_record = _get_current_user_record(users_file)
+        if user_record is None:
+            return redirect(url_for("auth.login_page"))
+        try:
+            import markdown
+        except ImportError:
+            return render_template("tutorial.html", content="<p>请安装 markdown 依赖：pip install markdown</p>")
+        tutorial_file = config.db_file.parent / "tutorial.md"
+        if not tutorial_file.exists():
+            return render_template("tutorial.html", content="<p>教程内容暂未配置。</p>")
+        md_text = tutorial_file.read_text(encoding="utf-8")
+        html_content = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
+        return render_template("tutorial.html", content=html_content)
+
     return bp

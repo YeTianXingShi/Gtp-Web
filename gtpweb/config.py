@@ -119,10 +119,8 @@ class ProviderModelCatalog:
     单个 AI 提供商的模型目录
 
     Attributes:
-        image_model: 用于图像生成的模型名称
         models: 模型配置列表
     """
-    image_model: str
     models: tuple[ProviderModelConfig, ...]
 
 
@@ -155,17 +153,14 @@ class AppConfig:
         users_file: 用户配置文件路径
         users: 用户名到密码哈希的映射
         model_config_file: 模型配置文件路径
-        image_tool_provider: 图像工具提供商 (openai/google)
         magic_login_secret: 免登录链接签名密钥
         magic_login_default_max_age: 免登录链接默认有效期（秒）
         openai_base_url: OpenAI API 基础 URL
         openai_api_key: OpenAI API 密钥
         openai_models: OpenAI 模型列表
-        openai_image_model: OpenAI 图像生成模型
         google_base_url: Google API 基础 URL
         google_api_key: Google API 密钥
         google_models: Google 模型列表
-        google_image_model: Google 图像生成模型
         claude_base_url: Claude API 基础 URL
         claude_api_key: Claude API 密钥
         claude_models: Claude 模型列表
@@ -190,17 +185,14 @@ class AppConfig:
     users_file: Path
     users: dict[str, str]
     model_config_file: Path
-    image_tool_provider: str
     magic_login_secret: str
     magic_login_default_max_age: int
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
-    openai_image_model: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
-    google_image_model: str
     claude_base_url: str
     claude_api_key: str
     claude_models: list[str]
@@ -276,25 +268,6 @@ def parse_bool(raw_value: str, default: bool) -> bool:
     if value in {"0", "false", "no", "off"}:
         return False
     return default
-
-
-def parse_image_tool_provider(raw_value: str) -> str:
-    """
-    解析图像工具提供商
-
-    Args:
-        raw_value: 提供商名称字符串
-
-    Returns:
-        标准化的提供商名称 (openai 或 google)
-
-    Raises:
-        ValueError: 当提供商名称无效时
-    """
-    provider = str(raw_value or "").strip().lower() or PROVIDER_OPENAI
-    if provider not in {PROVIDER_OPENAI, PROVIDER_GOOGLE}:
-        raise ValueError("IMAGE_TOOL_PROVIDER 仅支持 openai 或 google。")
-    return provider
 
 
 def build_grouped_env_files(env_dir: Path) -> tuple[Path, ...]:
@@ -677,8 +650,6 @@ def _parse_provider_catalog(provider: str, raw_provider: Any) -> ProviderModelCa
     """
     provider_data = _ensure_json_object(raw_provider, context=provider)
 
-    # 解析图像模型
-    image_model = _parse_optional_text(provider_data.get("image_model"), context=f"{provider}.image_model")
     defaults = _ensure_json_object(provider_data.get("defaults"), context=f"{provider}.defaults")
 
     # 解析默认推理/Thinking 设置
@@ -713,7 +684,7 @@ def _parse_provider_catalog(provider: str, raw_provider: Any) -> ProviderModelCa
         for index, item in enumerate(raw_models, start=1)
     )
 
-    return ProviderModelCatalog(image_model=image_model, models=models)
+    return ProviderModelCatalog(models=models)
 
 
 def parse_model_catalog_text(raw_text: str) -> ModelCatalog:
@@ -796,8 +767,6 @@ def load_config() -> AppConfig:
     model_config_file = _resolve_project_path(os.getenv("MODEL_CONFIG_FILE", str(DEFAULT_MODEL_CONFIG_FILE)))
     model_catalog = load_model_catalog(model_config_file)
 
-    # 解析图像工具提供商
-    image_tool_provider = parse_image_tool_provider(os.getenv("IMAGE_TOOL_PROVIDER", PROVIDER_OPENAI))
     magic_login_secret = os.getenv("MAGIC_LOGIN_SECRET", "").strip() or os.getenv(
         "APP_SECRET_KEY", "dev-secret-change-me"
     )
@@ -807,13 +776,11 @@ def load_config() -> AppConfig:
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip()
     openai_api_key = os.getenv("OPENAI_API_KEY", "")
     openai_models = [item.name for item in model_catalog.openai.models]
-    openai_image_model = model_catalog.openai.image_model
 
     # Google 配置
     google_base_url = os.getenv("GOOGLE_BASE_URL", "").strip()
     google_api_key = os.getenv("GOOGLE_API_KEY", "")
     google_models = [item.name for item in model_catalog.google.models]
-    google_image_model = model_catalog.google.image_model
 
     # Claude 配置
     claude_base_url = os.getenv("CLAUDE_BASE_URL", "").strip()
@@ -848,8 +815,8 @@ def load_config() -> AppConfig:
     log_to_stdout = parse_bool(os.getenv("LOG_TO_STDOUT", "1"), default=True)
 
     # 验证 AI 提供商配置
-    use_openai = bool(openai_models or openai_image_model)
-    use_google = bool(google_models or google_image_model)
+    use_openai = bool(openai_models)
+    use_google = bool(google_models)
     use_claude = bool(claude_models)
 
     if use_openai and not openai_base_url:
@@ -868,17 +835,14 @@ def load_config() -> AppConfig:
         users_file=users_file,
         users=users,
         model_config_file=model_config_file,
-        image_tool_provider=image_tool_provider,
         magic_login_secret=magic_login_secret,
         magic_login_default_max_age=magic_login_default_max_age,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
-        openai_image_model=openai_image_model,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
-        google_image_model=google_image_model,
         claude_base_url=claude_base_url,
         claude_api_key=claude_api_key,
         claude_models=claude_models,

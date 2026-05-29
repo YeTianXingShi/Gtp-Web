@@ -20,12 +20,11 @@ from openai import OpenAI
 
 from gtpweb.ai_providers import ModelOption, build_model_options
 from gtpweb.attachments import parse_allowed_attachment_exts
-from gtpweb.config import AppConfig, load_model_catalog, parse_bool, parse_image_tool_provider
+from gtpweb.config import AppConfig, load_model_catalog, parse_bool
 from gtpweb.utils import safe_int
 
 # 可热更新的环境变量键
 HOT_RELOADABLE_ENV_KEYS = {
-    "IMAGE_TOOL_PROVIDER",
     "OPENAI_BASE_URL",
     "OPENAI_API_KEY",
     "GOOGLE_BASE_URL",
@@ -41,15 +40,12 @@ HOT_RELOADABLE_ENV_KEYS = {
 
 @dataclass
 class RuntimeSettings:
-    image_tool_provider: str
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
-    openai_image_model: str
     google_base_url: str
     google_api_key: str
     google_models: list[str]
-    google_image_model: str
     claude_base_url: str
     claude_api_key: str
     claude_models: list[str]
@@ -129,23 +125,18 @@ def build_runtime_settings(
 
     model_catalog = load_model_catalog(base_config.model_config_file)
 
-    image_tool_provider = parse_image_tool_provider(
-        choose_text("IMAGE_TOOL_PROVIDER", base_config.image_tool_provider)
-    )
     openai_base_url = choose_text("OPENAI_BASE_URL", base_config.openai_base_url, allow_empty=True)
     openai_api_key = choose_text("OPENAI_API_KEY", base_config.openai_api_key, allow_empty=True)
     openai_models = [item.name for item in model_catalog.openai.models]
-    openai_image_model = model_catalog.openai.image_model
     google_base_url = choose_text("GOOGLE_BASE_URL", base_config.google_base_url, allow_empty=True)
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = [item.name for item in model_catalog.google.models]
-    google_image_model = model_catalog.google.image_model
     claude_base_url = choose_text("CLAUDE_BASE_URL", base_config.claude_base_url, allow_empty=True)
     claude_api_key = choose_text("CLAUDE_API_KEY", base_config.claude_api_key, allow_empty=True)
     claude_models = [item.name for item in model_catalog.claude.models]
 
-    use_openai = bool(openai_models or openai_image_model)
-    use_google = bool(google_models or google_image_model)
+    use_openai = bool(openai_models)
+    use_google = bool(google_models)
     use_claude = bool(claude_models)
 
     if use_openai and not openai_base_url:
@@ -172,15 +163,12 @@ def build_runtime_settings(
     allowed_attachment_exts = choose_allowed_exts(base_config.allowed_attachment_exts)
 
     return RuntimeSettings(
-        image_tool_provider=image_tool_provider,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,
-        openai_image_model=openai_image_model,
         google_base_url=google_base_url,
         google_api_key=google_api_key,
         google_models=google_models,
-        google_image_model=google_image_model,
         claude_base_url=claude_base_url,
         claude_api_key=claude_api_key,
         claude_models=claude_models,
@@ -199,7 +187,7 @@ def _build_openai_client(
     settings: RuntimeSettings,
     openai_client_factory: Callable[..., OpenAI],
 ) -> OpenAI | None:
-    if not (settings.openai_models or settings.openai_image_model):
+    if not settings.openai_models:
         return None
     return openai_client_factory(
         api_key=settings.openai_api_key,
@@ -212,7 +200,7 @@ def _build_google_client(
     settings: RuntimeSettings,
     google_client_factory: Callable[..., Any],
 ) -> Any | None:
-    if not (settings.google_models or settings.google_image_model):
+    if not settings.google_models:
         return None
     return google_client_factory(
         api_key=settings.google_api_key,
@@ -296,16 +284,12 @@ def _collect_runtime_setting_changes(
     new_settings: RuntimeSettings,
 ) -> list[str]:
     changed_keys: list[str] = []
-    if old_settings.image_tool_provider != new_settings.image_tool_provider:
-        changed_keys.append("IMAGE_TOOL_PROVIDER")
     if old_settings.openai_base_url != new_settings.openai_base_url:
         changed_keys.append("OPENAI_BASE_URL")
     if old_settings.openai_api_key != new_settings.openai_api_key:
         changed_keys.append("OPENAI_API_KEY")
     if old_settings.openai_models != new_settings.openai_models:
         changed_keys.append("OPENAI_MODELS")
-    if old_settings.openai_image_model != new_settings.openai_image_model:
-        changed_keys.append("OPENAI_IMAGE_MODEL")
     if _snapshot_model_config_keys(old_settings.model_options, "openai") != _snapshot_model_config_keys(
         new_settings.model_options,
         "openai",
@@ -317,8 +301,6 @@ def _collect_runtime_setting_changes(
         changed_keys.append("GOOGLE_API_KEY")
     if old_settings.google_models != new_settings.google_models:
         changed_keys.append("GOOGLE_MODELS")
-    if old_settings.google_image_model != new_settings.google_image_model:
-        changed_keys.append("GOOGLE_IMAGE_MODEL")
     if _snapshot_model_config_keys(old_settings.model_options, "google") != _snapshot_model_config_keys(
         new_settings.model_options,
         "google",
@@ -374,7 +356,6 @@ def apply_runtime_config_values(
         old_settings.openai_base_url != new_settings.openai_base_url
         or old_settings.openai_api_key != new_settings.openai_api_key
         or old_settings.openai_models != new_settings.openai_models
-        or old_settings.openai_image_model != new_settings.openai_image_model
     ):
         openai_client_factory = app.extensions["openai_client_factory"]
         runtime_state.openai_client = _build_openai_client(new_settings, openai_client_factory)
@@ -383,7 +364,6 @@ def apply_runtime_config_values(
         old_settings.google_base_url != new_settings.google_base_url
         or old_settings.google_api_key != new_settings.google_api_key
         or old_settings.google_models != new_settings.google_models
-        or old_settings.google_image_model != new_settings.google_image_model
     ):
         google_client_factory = app.extensions["google_client_factory"]
         runtime_state.google_client = _build_google_client(new_settings, google_client_factory)

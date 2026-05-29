@@ -37,7 +37,6 @@ from gtpweb.ai_providers import (
     resolve_conversation_model_settings,
     resolve_model_option,
 )
-from gtpweb.assistant_actions import execute_assistant_action, parse_assistant_action
 from gtpweb.attachments import (
     build_file_text_block,
     build_message_content_for_model,
@@ -614,25 +613,9 @@ def _stream_chat_response(
         finally:
             assistant_text = "".join(assistant_parts).strip()
             assistant_attachments: list[dict[str, Any]] = []
-            if assistant_text:
-                assistant_action = parse_assistant_action(assistant_text)
-                if assistant_action is not None:
-                    action_result = execute_assistant_action(
-                        assistant_action,
-                        image_tool_provider=runtime_settings.image_tool_provider,
-                        openai_image_model=runtime_settings.openai_image_model,
-                        google_image_model=runtime_settings.google_image_model,
-                        openai_client=openai_client,
-                        google_client=google_client,
-                        conversation_id=conversation_id,
-                        upload_dir=upload_dir,
-                        safe_username=safe_filename(username),
-                    )
-                    assistant_text = action_result.message_text.strip()
-                    assistant_attachments = list(action_result.attachments)
 
             if assistant_text or assistant_attachments:
-                stored_text = assistant_text or "已生成图片，请查看下方结果。"
+                stored_text = assistant_text
                 stored_reasoning = "".join(reasoning_parts).strip()
                 stored_status = "complete" if upstream_finished and not has_error else "incomplete"
                 _save_assistant_message(

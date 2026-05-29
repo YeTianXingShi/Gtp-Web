@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 
 import pytest
-
-PNG_1X1_BYTES = (
-    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-    b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?"
-    b"\x00\x05\xfe\x02\xfeA\x0f\x95~\x00\x00\x00\x00IEND\xaeB`\x82"
-)
 
 
 class _FakeStream:
@@ -53,33 +46,11 @@ class _FakeResponses:
         return _FakeResponsesStream(self._response_events)
 
 
-class _FakeImageItem:
-    def __init__(self, image_bytes: bytes):
-        self.b64_json = base64.b64encode(image_bytes).decode("ascii")
-
-
-class _FakeImageResponse:
-    def __init__(self, image_bytes: bytes):
-        self.data = [_FakeImageItem(image_bytes)]
-
-
-class _FakeImages:
-    def __init__(self, seen_requests: list[dict], image_bytes: bytes):
-        self._seen_requests = seen_requests
-        self._image_bytes = image_bytes
-
-    def generate(self, **kwargs):
-        self._seen_requests.append(kwargs)
-        return _FakeImageResponse(self._image_bytes)
-
-
 class _FakeOpenAI:
     def __init__(
         self,
         seen_requests: list[dict],
-        seen_image_requests: list[dict],
         stream_text: str,
-        image_bytes: bytes,
         response_events: list[object] | None = None,
         **_kwargs,
     ):
@@ -89,7 +60,6 @@ class _FakeOpenAI:
             response_events
             or [{"type": "response.output_text.delta", "delta": stream_text}],
         )
-        self.images = _FakeImages(seen_image_requests, image_bytes)
 
 
 class _FakeGoogleChunk:
@@ -97,84 +67,33 @@ class _FakeGoogleChunk:
         self.text = text
 
 
-class _FakeGoogleImage:
-    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
-        self.image_bytes = image_bytes
-        self.mime_type = mime_type
-
-
-class _FakeGeneratedImage:
-    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
-        self.image = _FakeGoogleImage(image_bytes=image_bytes, mime_type=mime_type)
-        self.rai_filtered_reason = None
-
-
-class _FakeGenerateImagesResponse:
-    def __init__(self, image_bytes: bytes):
-        self.generated_images = [_FakeGeneratedImage(image_bytes=image_bytes)]
-
-
-class _FakeGoogleBlob:
-    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
-        self.data = image_bytes
-        self.mime_type = mime_type
-
-
-class _FakeGooglePart:
-    def __init__(self, image_bytes: bytes, mime_type: str = "image/png"):
-        self.inline_data = _FakeGoogleBlob(image_bytes=image_bytes, mime_type=mime_type)
-        self.text = None
-
-
-class _FakeGenerateContentImageResponse:
-    def __init__(self, image_bytes: bytes):
-        self.parts = [_FakeGooglePart(image_bytes=image_bytes)]
-
-
 class _FakeGoogleModels:
     def __init__(
         self,
         seen_requests: list[dict],
-        seen_generate_images_requests: list[dict],
-        seen_generate_content_image_requests: list[dict],
         stream_text: str,
-        image_bytes: bytes,
     ):
         self._seen_requests = seen_requests
-        self._seen_generate_images_requests = seen_generate_images_requests
-        self._seen_generate_content_image_requests = seen_generate_content_image_requests
         self._stream_text = stream_text
-        self._image_bytes = image_bytes
 
     def generate_content_stream(self, **kwargs):
         self._seen_requests.append(kwargs)
         return [_FakeGoogleChunk(self._stream_text)]
 
-    def generate_images(self, **kwargs):
-        self._seen_generate_images_requests.append(kwargs)
-        return _FakeGenerateImagesResponse(self._image_bytes)
-
     def generate_content(self, **kwargs):
-        self._seen_generate_content_image_requests.append(kwargs)
-        return _FakeGenerateContentImageResponse(self._image_bytes)
+        return _FakeGoogleChunk(self._stream_text)
 
 
 class _FakeGoogleClient:
     def __init__(
         self,
         seen_requests: list[dict],
-        seen_generate_images_requests: list[dict],
-        seen_generate_content_image_requests: list[dict],
         stream_text: str,
-        image_bytes: bytes,
         **_kwargs,
     ):
         self.models = _FakeGoogleModels(
             seen_requests=seen_requests,
-            seen_generate_images_requests=seen_generate_images_requests,
-            seen_generate_content_image_requests=seen_generate_content_image_requests,
             stream_text=stream_text,
-            image_bytes=image_bytes,
         )
 
 
@@ -190,7 +109,6 @@ def _create_test_app(
     openai_stream_text: str = "ok",
     openai_response_events: list[object] | None = None,
     google_stream_text: str = "ok",
-    image_bytes: bytes = PNG_1X1_BYTES,
 ):
     users_file = tmp_path / "users.json"
     users_file.write_text(
@@ -201,7 +119,6 @@ def _create_test_app(
     for key in (
         "ENV_DIR",
         "MODEL_CONFIG_FILE",
-        "IMAGE_TOOL_PROVIDER",
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
         "GOOGLE_BASE_URL",
@@ -219,7 +136,6 @@ def _create_test_app(
             "APP_SECRET_KEY=test-secret\n"
             "PORT=8000\n"
             "FLASK_DEBUG=1\n"
-            "IMAGE_TOOL_PROVIDER=openai\n"
         ),
         encoding="utf-8",
     )
@@ -250,17 +166,14 @@ def _create_test_app(
         or (
             '{\n'
             '  "openai": {\n'
-            '    "image_model": "dall-e-3",\n'
             '    "models": [\n'
             '      {"name": "gpt-4o-mini"}\n'
             '    ]\n'
             '  },\n'
             '  "google": {\n'
-            '    "image_model": "",\n'
             '    "models": []\n'
             '  },\n'
             '  "claude": {\n'
-            '    "image_model": "",\n'
             '    "models": []\n'
             '  }\n'
             '}\n'
@@ -293,18 +206,13 @@ def _create_test_app(
     from gtpweb import app_factory
 
     seen_openai_requests: list[dict] = []
-    seen_openai_image_requests: list[dict] = []
     seen_google_requests: list[dict] = []
-    seen_google_image_requests: list[dict] = []
-    seen_google_content_image_requests: list[dict] = []
     seen_google_client_kwargs: list[dict] = []
 
     def _build_fake_openai(**kwargs):
         return _FakeOpenAI(
             seen_requests=seen_openai_requests,
-            seen_image_requests=seen_openai_image_requests,
             stream_text=openai_stream_text,
-            image_bytes=image_bytes,
             response_events=openai_response_events,
             **kwargs,
         )
@@ -313,10 +221,7 @@ def _create_test_app(
         seen_google_client_kwargs.append(dict(kwargs))
         return _FakeGoogleClient(
             seen_requests=seen_google_requests,
-            seen_generate_images_requests=seen_google_image_requests,
-            seen_generate_content_image_requests=seen_google_content_image_requests,
             stream_text=google_stream_text,
-            image_bytes=image_bytes,
             **kwargs,
         )
 
@@ -330,10 +235,7 @@ def _create_test_app(
     flask_app = app_factory.create_app()
     flask_app.config.update(TESTING=True)
     flask_app.extensions["seen_openai_requests"] = seen_openai_requests
-    flask_app.extensions["seen_openai_image_requests"] = seen_openai_image_requests
     flask_app.extensions["seen_google_requests"] = seen_google_requests
-    flask_app.extensions["seen_google_image_requests"] = seen_google_image_requests
-    flask_app.extensions["seen_google_content_image_requests"] = seen_google_content_image_requests
     flask_app.extensions["seen_google_client_kwargs"] = seen_google_client_kwargs
     return flask_app
 

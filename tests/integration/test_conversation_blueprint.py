@@ -14,10 +14,9 @@ def _create_reasoning_conversation(app_builder):
         models_config_text=(
             '{\n'
             '  "openai": {\n'
-            '    "image_model": "dall-e-3",\n'
             '    "models": [{"name": "gpt-5-mini", "reasoning": {"effort": "high", "summary": "auto"}}]\n'
             '  },\n'
-            '  "google": {"image_model": "", "models": []}\n'
+            '  "google": {"models": []}\n'
             '}\n'
         ),
         openai_env_text=(

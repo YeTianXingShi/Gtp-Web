@@ -7,7 +7,6 @@ def test_parse_model_catalog_supports_model_level_enabled_flags() -> None:
     catalog = parse_model_catalog_text(
         '{\n'
         '  "openai": {\n'
-        '    "image_model": "",\n'
         '    "defaults": {"reasoning": {"enabled": true, "effort": "high", "summary": "auto"}},\n'
         '    "models": [\n'
         '      {"name": "gpt-5", "reasoning": {"enabled": false}},\n'
@@ -15,7 +14,6 @@ def test_parse_model_catalog_supports_model_level_enabled_flags() -> None:
         '    ]\n'
         '  },\n'
         '  "google": {\n'
-        '    "image_model": "",\n'
         '    "defaults": {"thinking": false},\n'
         '    "models": [\n'
         '      {"name": "gemini-2.5-pro", "thinking": {"include_thoughts": false, "level": "medium"}}\n'
@@ -46,9 +44,8 @@ def test_parse_model_catalog_supports_model_level_enabled_flags() -> None:
 def test_parse_model_catalog_allows_clearing_inherited_google_budget() -> None:
     catalog = parse_model_catalog_text(
         '{\n'
-        '  "openai": {"image_model": "", "models": []},\n'
+        '  "openai": {"models": []},\n'
         '  "google": {\n'
-        '    "image_model": "",\n'
         '    "defaults": {"thinking": {"enabled": true, "budget": 1024}},\n'
         '    "models": [\n'
         '      {"name": "gemini-2.5-pro", "thinking": {"budget": null, "level": "high"}}\n'

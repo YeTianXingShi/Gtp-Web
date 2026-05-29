@@ -17,11 +17,13 @@ from gtpweb.utils import model_name_matches_patterns
 # 提供商常量
 PROVIDER_OPENAI = "openai"
 PROVIDER_GOOGLE = "google"
+PROVIDER_CLAUDE = "claude"
 
 # 提供商显示名称
 PROVIDER_LABELS = {
     PROVIDER_OPENAI: "OpenAI",
     PROVIDER_GOOGLE: "Google Gemini",
+    PROVIDER_CLAUDE: "Anthropic Claude",
 }
 
 
@@ -190,6 +192,7 @@ def build_model_option(provider: str, model_config: ProviderModelConfig) -> Mode
 def build_model_options(
     openai_models: Iterable[ProviderModelConfig | str],
     google_models: Iterable[ProviderModelConfig | str],
+    claude_models: Iterable[ProviderModelConfig | str] = (),
 ) -> tuple[ModelOption, ...]:
     """
     构建所有可用模型选项
@@ -197,6 +200,7 @@ def build_model_options(
     Args:
         openai_models: OpenAI 模型列表
         google_models: Google 模型列表
+        claude_models: Claude 模型列表
 
     Returns:
         所有模型选项的元组
@@ -209,6 +213,7 @@ def build_model_options(
     for provider, model_configs in (
         (PROVIDER_OPENAI, openai_models),
         (PROVIDER_GOOGLE, google_models),
+        (PROVIDER_CLAUDE, claude_models),
     ):
         for model_config in model_configs:
             options.append(build_model_option(provider, model_config))
@@ -232,7 +237,7 @@ def build_model_groups(model_options: Iterable[ModelOption]) -> tuple[ModelGroup
     grouped: list[ModelGroup] = []
     options_tuple = tuple(model_options)
 
-    for provider in (PROVIDER_OPENAI, PROVIDER_GOOGLE):
+    for provider in (PROVIDER_OPENAI, PROVIDER_GOOGLE, PROVIDER_CLAUDE):
         provider_options = tuple(option for option in options_tuple if option.provider == provider)
         if not provider_options:
             continue
@@ -765,3 +770,72 @@ def extract_google_reasoning_delta(event_obj: Any) -> str:
             fragments.append(fragment)
 
     return "".join(fragments)
+
+
+def build_claude_messages(
+    messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """
+    将通用消息格式转换为 Anthropic Messages API 格式。
+
+    Returns:
+        (system_prompt, claude_messages) 元组
+    """
+    system_parts: list[str] = []
+    claude_msgs: list[dict[str, Any]] = []
+
+    for message in messages:
+        role = str(message.get("role", "user")).strip().lower() or "user"
+        content = message.get("content", "")
+
+        if role == "system":
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                text = "\n".join(
+                    str(item.get("text", ""))
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                ).strip()
+            else:
+                text = str(content).strip()
+            if text:
+                system_parts.append(text)
+            continue
+
+        claude_role = "assistant" if role == "assistant" else "user"
+
+        if isinstance(content, str):
+            claude_msgs.append({"role": claude_role, "content": content})
+        elif isinstance(content, list):
+            claude_content: list[dict[str, Any]] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                part_type = str(item.get("type", "")).strip().lower()
+                if part_type == "text":
+                    text = str(item.get("text", ""))
+                    if text:
+                        claude_content.append({"type": "text", "text": text})
+                elif part_type == "image_url":
+                    image_url = item.get("image_url")
+                    if not isinstance(image_url, dict):
+                        continue
+                    url = str(image_url.get("url", "")).strip()
+                    match = _DATA_URL_RE.match(url)
+                    if match:
+                        claude_content.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": match.group("mime").strip(),
+                                "data": match.group("data").strip(),
+                            },
+                        })
+            if claude_content:
+                claude_msgs.append({"role": claude_role, "content": claude_content})
+        else:
+            claude_msgs.append({"role": claude_role, "content": str(content)})
+
+    system_prompt = "\n\n".join(system_parts).strip() or None
+    return system_prompt, claude_msgs

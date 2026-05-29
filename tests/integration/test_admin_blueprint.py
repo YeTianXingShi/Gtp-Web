@@ -39,6 +39,7 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "env_app",
         "env_openai",
         "env_google",
+        "env_claude",
         "env_storage",
         "env_attachments",
         "env_logging",
@@ -219,8 +220,8 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     openai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
     google_env_text = Path(env_files[2]).read_text(encoding="utf-8")
     models_config_text = Path(app.config["MODEL_CONFIG_FILE"]).read_text(encoding="utf-8")
-    attachments_env_text = Path(env_files[4]).read_text(encoding="utf-8")
-    logging_env_text = Path(env_files[5]).read_text(encoding="utf-8")
+    attachments_env_text = Path(env_files[5]).read_text(encoding="utf-8")
+    logging_env_text = Path(env_files[6]).read_text(encoding="utf-8")
     assert "IMAGE_TOOL_PROVIDER=google" in app_env_text
     assert "OPENAI_BASE_URL=https://new.example/v1" in openai_env_text
     assert "GOOGLE_BASE_URL=https://gemini-proxy.example" in google_env_text

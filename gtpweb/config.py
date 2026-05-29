@@ -21,6 +21,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .ai_providers import (
+    PROVIDER_CLAUDE,
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
     GoogleThinkingSettings,
@@ -86,6 +87,12 @@ ENV_GROUP_SPECS = (
         description="维护 GOOGLE_BASE_URL 与 GOOGLE_API_KEY；模型列表与 thinking 参数请改 `config/models.jsonc`。",
     ),
     EnvGroupSpec(
+        key="claude",
+        filename="claude.env",
+        label="Anthropic Claude 接入配置",
+        description="维护 CLAUDE_BASE_URL 与 CLAUDE_API_KEY；模型列表请改 `config/models.jsonc`。",
+    ),
+    EnvGroupSpec(
         key="storage",
         filename="storage.env",
         label="存储配置",
@@ -127,9 +134,11 @@ class ModelCatalog:
     Attributes:
         openai: OpenAI 模型目录
         google: Google Gemini 模型目录
+        claude: Anthropic Claude 模型目录
     """
     openai: ProviderModelCatalog
     google: ProviderModelCatalog
+    claude: ProviderModelCatalog
 
 
 @dataclass(frozen=True)
@@ -157,6 +166,9 @@ class AppConfig:
         google_api_key: Google API 密钥
         google_models: Google 模型列表
         google_image_model: Google 图像生成模型
+        claude_base_url: Claude API 基础 URL
+        claude_api_key: Claude API 密钥
+        claude_models: Claude 模型列表
         db_file: 数据库文件路径
         upload_dir: 上传文件目录
         max_upload_mb: 最大上传文件大小（MB）
@@ -189,6 +201,9 @@ class AppConfig:
     google_api_key: str
     google_models: list[str]
     google_image_model: str
+    claude_base_url: str
+    claude_api_key: str
+    claude_models: list[str]
     db_file: Path
     upload_dir: Path
     max_upload_mb: int
@@ -725,6 +740,7 @@ def parse_model_catalog_text(raw_text: str) -> ModelCatalog:
     return ModelCatalog(
         openai=_parse_provider_catalog(PROVIDER_OPENAI, raw_data.get(PROVIDER_OPENAI)),
         google=_parse_provider_catalog(PROVIDER_GOOGLE, raw_data.get(PROVIDER_GOOGLE)),
+        claude=_parse_provider_catalog(PROVIDER_CLAUDE, raw_data.get(PROVIDER_CLAUDE)),
     )
 
 
@@ -799,6 +815,11 @@ def load_config() -> AppConfig:
     google_models = [item.name for item in model_catalog.google.models]
     google_image_model = model_catalog.google.image_model
 
+    # Claude 配置
+    claude_base_url = os.getenv("CLAUDE_BASE_URL", "").strip()
+    claude_api_key = os.getenv("CLAUDE_API_KEY", "")
+    claude_models = [item.name for item in model_catalog.claude.models]
+
     # 存储配置
     db_file = _resolve_project_path(os.getenv("CHAT_DB_FILE", str(DEFAULT_DB_FILE)))
     upload_dir = _resolve_project_path(os.getenv("UPLOAD_DIR", str(DEFAULT_UPLOAD_DIR)))
@@ -811,7 +832,11 @@ def load_config() -> AppConfig:
     allowed_attachment_exts = parse_allowed_attachment_exts(os.getenv("ALLOWED_ATTACHMENT_EXTS", ""))
 
     # 构建模型选项
-    model_options = build_model_options(model_catalog.openai.models, model_catalog.google.models)
+    model_options = build_model_options(
+        model_catalog.openai.models,
+        model_catalog.google.models,
+        model_catalog.claude.models,
+    )
     models = [item.id for item in model_options]
 
     # 日志配置
@@ -825,6 +850,7 @@ def load_config() -> AppConfig:
     # 验证 AI 提供商配置
     use_openai = bool(openai_models or openai_image_model)
     use_google = bool(google_models or google_image_model)
+    use_claude = bool(claude_models)
 
     if use_openai and not openai_base_url:
         raise ValueError("OPENAI_BASE_URL is required when OpenAI is configured.")
@@ -832,6 +858,8 @@ def load_config() -> AppConfig:
         raise ValueError("OPENAI_API_KEY is required when OpenAI is configured.")
     if use_google and not google_api_key:
         raise ValueError("GOOGLE_API_KEY is required when Google is configured.")
+    if use_claude and not claude_api_key:
+        raise ValueError("CLAUDE_API_KEY is required when Claude is configured.")
 
     return AppConfig(
         secret_key=os.getenv("APP_SECRET_KEY", "dev-secret-change-me"),
@@ -851,6 +879,9 @@ def load_config() -> AppConfig:
         google_api_key=google_api_key,
         google_models=google_models,
         google_image_model=google_image_model,
+        claude_base_url=claude_base_url,
+        claude_api_key=claude_api_key,
+        claude_models=claude_models,
         db_file=db_file,
         upload_dir=upload_dir,
         max_upload_mb=max_upload_mb,

@@ -23,8 +23,10 @@ from openai import APIStatusError, OpenAIError
 from werkzeug.datastructures import FileStorage
 
 from gtpweb.ai_providers import (
+    PROVIDER_CLAUDE,
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
+    build_claude_messages,
     build_effective_google_thinking_settings,
     build_effective_openai_reasoning_settings,
     build_google_generate_content_config,
@@ -347,6 +349,7 @@ def _stream_chat_response(
     runtime_settings: Any,
     openai_client: Any,
     google_client: Any,
+    claude_client: Any,
     enable_title_update: bool,
 ) -> Response:
     def generate() -> Any:
@@ -474,6 +477,52 @@ def _stream_chat_response(
                         {
                             "type": "error",
                             "error": "请求 Gemini 成功但未收到流式文本，请确认模型支持流式输出。",
+                        }
+                    )
+            elif selected_provider == PROVIDER_CLAUDE:
+                if claude_client is None:
+                    raise RuntimeError("Claude 客户端未初始化，请检查 CLAUDE 配置。")
+                system_prompt, claude_msgs = build_claude_messages(completion_messages)
+                request_kwargs: dict[str, Any] = {
+                    "model": upstream_model,
+                    "messages": claude_msgs,
+                    "max_tokens": 16384,
+                    "stream": True,
+                }
+                if system_prompt:
+                    request_kwargs["system"] = system_prompt
+                with claude_client.messages.stream(**{k: v for k, v in request_kwargs.items() if k != "stream"}) as stream:
+                    for event in stream:
+                        event_type = getattr(event, "type", "")
+                        if event_type == "content_block_delta":
+                            delta_obj = getattr(event, "delta", None)
+                            if delta_obj is not None:
+                                delta_type = getattr(delta_obj, "type", "")
+                                if delta_type == "thinking_delta":
+                                    thinking_text = getattr(delta_obj, "thinking", "")
+                                    if thinking_text:
+                                        reasoning_parts.append(thinking_text)
+                                        yield sse_payload({"type": "reasoning", "text": thinking_text})
+                                elif delta_type == "text_delta":
+                                    delta = getattr(delta_obj, "text", "")
+                                    if delta:
+                                        assistant_parts.append(delta)
+                                        delta_count += 1
+                                        if delta_count % 20 == 0:
+                                            logger.debug(
+                                                "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                                conversation_id,
+                                                delta_count,
+                                                len("".join(assistant_parts)),
+                                            )
+                                        yield sse_payload({"type": "delta", "text": delta})
+
+                if not assistant_parts and not has_error:
+                    has_error = True
+                    yield sse_payload(
+                        {
+                            "type": "error",
+                            "error": "请求 Claude 成功但未收到流式文本，请确认模型支持流式输出。",
                         }
                     )
             else:
@@ -616,6 +665,34 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         runtime_settings = runtime_state.settings
         openai_client = runtime_state.openai_client
         google_client = runtime_state.google_client
+        claude_client = runtime_state.claude_client
+
+        # 检查用户是否有自定义 API Key
+        user_record = get_user_record(users_file, username)
+        if user_record:
+            user_api_keys = user_record.get("api_keys", {})
+            if user_api_keys.get("openai"):
+                from flask import current_app
+                factory = current_app.extensions["openai_client_factory"]
+                openai_client = factory(
+                    api_key=user_api_keys["openai"],
+                    base_url=runtime_settings.openai_base_url,
+                )
+            if user_api_keys.get("google"):
+                from flask import current_app
+                factory = current_app.extensions["google_client_factory"]
+                google_client = factory(
+                    api_key=user_api_keys["google"],
+                    base_url=runtime_settings.google_base_url,
+                )
+            if user_api_keys.get("claude"):
+                from flask import current_app
+                factory = current_app.extensions["claude_client_factory"]
+                claude_client = factory(
+                    api_key=user_api_keys["claude"],
+                    base_url=runtime_settings.claude_base_url,
+                )
+
         max_upload_mb = runtime_settings.max_upload_mb
         max_upload_bytes = runtime_settings.max_upload_bytes
         max_attachments_per_message = runtime_settings.max_attachments_per_message
@@ -885,6 +962,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,
+            claude_client=claude_client,
             enable_title_update=(existing_count == 0),
         )
 
@@ -911,6 +989,34 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         runtime_settings = runtime_state.settings
         openai_client = runtime_state.openai_client
         google_client = runtime_state.google_client
+        claude_client = runtime_state.claude_client
+
+        # 检查用户是否有自定义 API Key
+        user_record = get_user_record(users_file, username)
+        if user_record:
+            user_api_keys = user_record.get("api_keys", {})
+            if user_api_keys.get("openai"):
+                from flask import current_app
+                factory = current_app.extensions["openai_client_factory"]
+                openai_client = factory(
+                    api_key=user_api_keys["openai"],
+                    base_url=runtime_settings.openai_base_url,
+                )
+            if user_api_keys.get("google"):
+                from flask import current_app
+                factory = current_app.extensions["google_client_factory"]
+                google_client = factory(
+                    api_key=user_api_keys["google"],
+                    base_url=runtime_settings.google_base_url,
+                )
+            if user_api_keys.get("claude"):
+                from flask import current_app
+                factory = current_app.extensions["claude_client_factory"]
+                claude_client = factory(
+                    api_key=user_api_keys["claude"],
+                    base_url=runtime_settings.claude_base_url,
+                )
+
         max_text_file_chars = runtime_settings.max_text_file_chars
         logger.info("聊天重试请求: 用户=%s 会话ID=%s", username, conversation_id)
 
@@ -1010,6 +1116,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             runtime_settings=runtime_settings,
             openai_client=openai_client,
             google_client=google_client,
+            claude_client=claude_client,
             enable_title_update=False,
         )
 

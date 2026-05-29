@@ -206,6 +206,8 @@ def _create_test_app(
         "OPENAI_API_KEY",
         "GOOGLE_BASE_URL",
         "GOOGLE_API_KEY",
+        "CLAUDE_BASE_URL",
+        "CLAUDE_API_KEY",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -237,6 +239,11 @@ def _create_test_app(
         ),
         encoding="utf-8",
     )
+    (env_dir / "claude.env").write_text(
+        "CLAUDE_BASE_URL=\n"
+        "CLAUDE_API_KEY=\n",
+        encoding="utf-8",
+    )
     models_file = tmp_path / "models.jsonc"
     models_file.write_text(
         models_config_text
@@ -249,6 +256,10 @@ def _create_test_app(
             '    ]\n'
             '  },\n'
             '  "google": {\n'
+            '    "image_model": "",\n'
+            '    "models": []\n'
+            '  },\n'
+            '  "claude": {\n'
             '    "image_model": "",\n'
             '    "models": []\n'
             '  }\n'
@@ -309,8 +320,12 @@ def _create_test_app(
             **kwargs,
         )
 
+    def _build_fake_claude(**kwargs):
+        return None
+
     monkeypatch.setattr(app_factory, "build_openai_client", _build_fake_openai)
     monkeypatch.setattr(app_factory, "build_google_client", _build_fake_google)
+    monkeypatch.setattr(app_factory, "build_claude_client", _build_fake_claude)
 
     flask_app = app_factory.create_app()
     flask_app.config.update(TESTING=True)

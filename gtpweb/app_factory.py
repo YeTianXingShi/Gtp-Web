@@ -69,6 +69,33 @@ def build_google_client(*, api_key: str, base_url: str = "") -> Any:
     return genai.Client(**client_kwargs)
 
 
+def build_claude_client(*, api_key: str, base_url: str = "") -> Any:
+    """
+    创建 Anthropic Claude 客户端实例
+
+    Args:
+        api_key: Anthropic API 密钥
+        base_url: 自定义 API 基础 URL（可选）
+
+    Returns:
+        anthropic.Anthropic: 配置好的 Claude 客户端实例
+
+    Raises:
+        RuntimeError: 当缺少 anthropic 依赖时抛出
+    """
+    try:
+        import anthropic
+    except ImportError as exc:
+        raise RuntimeError(
+            "当前环境缺少 `anthropic` 依赖，请先执行 `pip install -r requirements.txt`。"
+        ) from exc
+
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    return anthropic.Anthropic(**client_kwargs)
+
+
 def create_app() -> Flask:
     """
     创建并配置 Flask 应用实例
@@ -126,10 +153,12 @@ def create_app() -> Flask:
     # 配置 AI 客户端工厂函数
     openai_client_factory = build_openai_client
     google_client_factory = build_google_client
+    claude_client_factory = build_claude_client
 
     # 注册到 Flask 扩展
     app.extensions["openai_client_factory"] = openai_client_factory
     app.extensions["google_client_factory"] = google_client_factory
+    app.extensions["claude_client_factory"] = claude_client_factory
     app.extensions["runtime_base_config"] = config
 
     # 创建运行时状态管理器
@@ -137,12 +166,14 @@ def create_app() -> Flask:
         config,
         openai_client_factory,
         google_client_factory,
+        claude_client_factory,
     )
 
     logger.info(
-        "应用启动: 运行时配置初始化完成 OpenAI模型=%s Google模型=%s",
+        "应用启动: 运行时配置初始化完成 OpenAI模型=%s Google模型=%s Claude模型=%s",
         ",".join(app.extensions["runtime_state"].settings.openai_models),
         ",".join(app.extensions["runtime_state"].settings.google_models),
+        ",".join(app.extensions["runtime_state"].settings.claude_models),
     )
 
     # 注册请求日志记录和蓝图

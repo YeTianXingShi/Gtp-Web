@@ -6,7 +6,8 @@
   // 2. `enabled` 用来控制该模型是否启用思考能力。
   // 3. OpenAI 支持：`enabled`、`effort`、`effort_options`、`summary`
   // 4. Google 支持：`enabled`、`include_thoughts`、`level`、`level_options`
-  // 5. 兼容旧写法：把 `reasoning` / `thinking` 直接写成 false 或 null，依然表示关闭。
+  // 5. Claude 模型不需要 reasoning/thinking 配置（由模型自行决定）。
+  // 6. 兼容旧写法：把 `reasoning` / `thinking` 直接写成 false 或 null，依然表示关闭。
   "openai": {
     "image_model": "",
     "models": [
@@ -28,6 +29,16 @@
           "effort": "medium",
           "effort_options": ["minimal", "low", "medium", "high", "xhigh"],
           "summary": "concise"
+        }
+      },
+      {
+        "name": "gpt-5.5",
+        "label": "GPT-5.5（旗舰版）",
+        "reasoning": {
+          "enabled": true,
+          "effort": "high",
+          "effort_options": ["minimal", "low", "medium", "high", "xhigh"],
+          "summary": "auto"
         }
       }
     ]
@@ -64,6 +75,19 @@
           "level": "high",
           "level_options": ["low", "high"]
         }
+      }
+    ]
+  },
+  "claude": {
+    "image_model": "",
+    "models": [
+      {
+        "name": "claude-sonnet-4-20250514",
+        "label": "Claude Sonnet 4（智能平衡）"
+      },
+      {
+        "name": "claude-opus-4-20250514",
+        "label": "Claude Opus 4（顶级推理）"
       }
     ]
   }

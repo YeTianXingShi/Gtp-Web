@@ -35,6 +35,8 @@ def _normalize_user_record(raw_record: Any, index: int) -> dict[str, Any]:
     username = str(raw_record.get("username", "")).strip()
     password = raw_record.get("password", "")
     is_admin = raw_record.get("is_admin", False)
+    enabled = raw_record.get("enabled", True)
+    api_keys = raw_record.get("api_keys", {})
 
     if not username:
         raise ValueError(f"用户配置格式错误: users[{index}].username 不能为空")
@@ -42,11 +44,17 @@ def _normalize_user_record(raw_record: Any, index: int) -> dict[str, Any]:
         raise ValueError(f"用户配置格式错误: users[{index}].password 不能为空")
     if not isinstance(is_admin, bool):
         raise ValueError(f"用户配置格式错误: users[{index}].is_admin 必须是布尔值")
+    if not isinstance(enabled, bool):
+        raise ValueError(f"用户配置格式错误: users[{index}].enabled 必须是布尔值")
+    if not isinstance(api_keys, dict):
+        raise ValueError(f"用户配置格式错误: users[{index}].api_keys 必须是对象")
 
     return {
         "username": username,
         "password": password,
         "is_admin": is_admin,
+        "enabled": enabled,
+        "api_keys": {str(k): str(v) for k, v in api_keys.items() if v},
     }
 
 
@@ -212,6 +220,8 @@ def list_users(users_file: Path) -> list[dict[str, Any]]:
             {
                 "username": record["username"],
                 "is_admin": record["is_admin"],
+                "enabled": record.get("enabled", True),
+                "has_api_keys": bool(record.get("api_keys")),
             }
             for record in config_data["users"]
         ],
@@ -254,6 +264,8 @@ def verify_user_credentials(users_file: Path, username: str, password: str) -> d
     """
     record = get_user_record(users_file, username)
     if record is None or record["password"] != password:
+        return None
+    if not record.get("enabled", True):
         return None
     return record
 

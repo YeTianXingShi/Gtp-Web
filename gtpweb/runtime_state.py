@@ -30,6 +30,8 @@ HOT_RELOADABLE_ENV_KEYS = {
     "OPENAI_API_KEY",
     "GOOGLE_BASE_URL",
     "GOOGLE_API_KEY",
+    "CLAUDE_BASE_URL",
+    "CLAUDE_API_KEY",
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
@@ -48,6 +50,9 @@ class RuntimeSettings:
     google_api_key: str
     google_models: list[str]
     google_image_model: str
+    claude_base_url: str
+    claude_api_key: str
+    claude_models: list[str]
     models: list[str]
     model_options: tuple[ModelOption, ...]
     max_upload_mb: int
@@ -63,6 +68,7 @@ class RuntimeState:
     env_values: dict[str, str]
     openai_client: OpenAI | None
     google_client: Any | None
+    claude_client: Any | None
 
 
 
@@ -134,9 +140,13 @@ def build_runtime_settings(
     google_api_key = choose_text("GOOGLE_API_KEY", base_config.google_api_key, allow_empty=True)
     google_models = [item.name for item in model_catalog.google.models]
     google_image_model = model_catalog.google.image_model
+    claude_base_url = choose_text("CLAUDE_BASE_URL", base_config.claude_base_url, allow_empty=True)
+    claude_api_key = choose_text("CLAUDE_API_KEY", base_config.claude_api_key, allow_empty=True)
+    claude_models = [item.name for item in model_catalog.claude.models]
 
     use_openai = bool(openai_models or openai_image_model)
     use_google = bool(google_models or google_image_model)
+    use_claude = bool(claude_models)
 
     if use_openai and not openai_base_url:
         raise ValueError("OPENAI_BASE_URL is required when OpenAI is configured.")
@@ -144,8 +154,14 @@ def build_runtime_settings(
         raise ValueError("OPENAI_API_KEY is required when OpenAI is configured.")
     if use_google and not google_api_key:
         raise ValueError("GOOGLE_API_KEY is required when Google is configured.")
+    if use_claude and not claude_api_key:
+        raise ValueError("CLAUDE_API_KEY is required when Claude is configured.")
 
-    model_options = build_model_options(model_catalog.openai.models, model_catalog.google.models)
+    model_options = build_model_options(
+        model_catalog.openai.models,
+        model_catalog.google.models,
+        model_catalog.claude.models,
+    )
     models = [item.id for item in model_options]
     max_upload_mb = choose_int("MAX_UPLOAD_MB", base_config.max_upload_mb)
     max_attachments_per_message = choose_int(
@@ -165,6 +181,9 @@ def build_runtime_settings(
         google_api_key=google_api_key,
         google_models=google_models,
         google_image_model=google_image_model,
+        claude_base_url=claude_base_url,
+        claude_api_key=claude_api_key,
+        claude_models=claude_models,
         models=models,
         model_options=model_options,
         max_upload_mb=max_upload_mb,
@@ -201,11 +220,23 @@ def _build_google_client(
     )
 
 
+def _build_claude_client(
+    settings: RuntimeSettings,
+    claude_client_factory: Callable[..., Any],
+) -> Any | None:
+    if not settings.claude_models:
+        return None
+    return claude_client_factory(
+        api_key=settings.claude_api_key,
+        base_url=settings.claude_base_url,
+    )
+
 
 def create_runtime_state(
     base_config: AppConfig,
     openai_client_factory: Callable[..., OpenAI],
     google_client_factory: Callable[..., Any],
+    claude_client_factory: Callable[..., Any] = lambda **kw: None,
 ) -> RuntimeState:
     env_values = read_env_files_values(base_config.env_files)
     settings = build_runtime_settings(base_config, env_values=env_values)
@@ -214,6 +245,7 @@ def create_runtime_state(
         env_values=env_values,
         openai_client=_build_openai_client(settings, openai_client_factory),
         google_client=_build_google_client(settings, google_client_factory),
+        claude_client=_build_claude_client(settings, claude_client_factory),
     )
 
 
@@ -292,6 +324,17 @@ def _collect_runtime_setting_changes(
         "google",
     ):
         changed_keys.append("GOOGLE_MODEL_CONFIG")
+    if old_settings.claude_base_url != new_settings.claude_base_url:
+        changed_keys.append("CLAUDE_BASE_URL")
+    if old_settings.claude_api_key != new_settings.claude_api_key:
+        changed_keys.append("CLAUDE_API_KEY")
+    if old_settings.claude_models != new_settings.claude_models:
+        changed_keys.append("CLAUDE_MODELS")
+    if _snapshot_model_config_keys(old_settings.model_options, "claude") != _snapshot_model_config_keys(
+        new_settings.model_options,
+        "claude",
+    ):
+        changed_keys.append("CLAUDE_MODEL_CONFIG")
     if old_settings.max_upload_mb != new_settings.max_upload_mb:
         changed_keys.append("MAX_UPLOAD_MB")
     if old_settings.max_attachments_per_message != new_settings.max_attachments_per_message:
@@ -344,6 +387,14 @@ def apply_runtime_config_values(
     ):
         google_client_factory = app.extensions["google_client_factory"]
         runtime_state.google_client = _build_google_client(new_settings, google_client_factory)
+
+    if (
+        old_settings.claude_base_url != new_settings.claude_base_url
+        or old_settings.claude_api_key != new_settings.claude_api_key
+        or old_settings.claude_models != new_settings.claude_models
+    ):
+        claude_client_factory = app.extensions.get("claude_client_factory", lambda **kw: None)
+        runtime_state.claude_client = _build_claude_client(new_settings, claude_client_factory)
 
     return {
         "applied_keys": applied_keys,

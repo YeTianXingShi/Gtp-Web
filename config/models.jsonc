@@ -80,15 +80,8 @@
   },
   "claude": {
     "image_model": "",
-    "models": [
-      {
-        "name": "claude-sonnet-4-20250514",
-        "label": "Claude Sonnet 4（智能平衡）"
-      },
-      {
-        "name": "claude-opus-4-20250514",
-        "label": "Claude Opus 4（顶级推理）"
-      }
-    ]
+    // 配置 CLAUDE_API_KEY 后，在此添加模型即可启用 Claude：
+    // {"name": "claude-sonnet-4-20250514", "label": "Claude Sonnet 4（智能平衡）"}
+    "models": []
   }
 }

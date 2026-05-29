@@ -31,6 +31,7 @@
         {% if is_admin %}
         <button id="admin-btn" class="btn-secondary" type="button">后台管理</button>
         {% endif %}
+        <button id="docs-btn" class="btn-secondary" type="button">文档中心</button>
         <button id="logout-btn" type="button">退出</button>
       </div>
     </header>
@@ -98,6 +99,18 @@
         </form>
       </section>
     </main>
+
+    <div id="docs-modal" class="modal-overlay" hidden>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>文档中心</h2>
+          <button id="docs-modal-close" class="modal-close" type="button">&times;</button>
+        </div>
+        <div id="docs-modal-body" class="modal-body">
+          <p class="muted">加载中...</p>
+        </div>
+      </div>
+    </div>
 
     <script>
       window.__APP_CONFIG__ = {

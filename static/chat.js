@@ -2052,6 +2052,100 @@ window.addEventListener("beforeunload", () => {
   }
 });
 
+// 文档中心
+const docsBtn = document.getElementById("docs-btn");
+const docsModal = document.getElementById("docs-modal");
+const docsModalClose = document.getElementById("docs-modal-close");
+const docsModalBody = document.getElementById("docs-modal-body");
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / 1048576).toFixed(1) + " MB";
+}
+
+function renderDocsLoading() {
+  docsModalBody.textContent = "";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = "加载中...";
+  docsModalBody.appendChild(p);
+}
+
+function renderDocsEmpty(msg) {
+  docsModalBody.textContent = "";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = msg;
+  docsModalBody.appendChild(p);
+}
+
+function renderDocsList(documents) {
+  docsModalBody.textContent = "";
+  const grouped = {};
+  for (const doc of documents) {
+    if (!grouped[doc.category]) grouped[doc.category] = [];
+    grouped[doc.category].push(doc);
+  }
+  for (const [category, docs] of Object.entries(grouped)) {
+    const section = document.createElement("div");
+    section.className = "docs-category";
+    const h3 = document.createElement("h3");
+    h3.className = "docs-category-title";
+    h3.textContent = category;
+    section.appendChild(h3);
+    for (const doc of docs) {
+      const item = document.createElement("div");
+      item.className = "docs-item";
+      const info = document.createElement("div");
+      info.className = "docs-item-info";
+      const title = document.createElement("span");
+      title.className = "docs-item-title";
+      title.textContent = doc.title;
+      const meta = document.createElement("span");
+      meta.className = "docs-item-meta";
+      meta.textContent = `${formatFileSize(doc.file_size)} · ${doc.uploaded_by} · ${doc.created_at.slice(0, 10)}`;
+      info.appendChild(title);
+      info.appendChild(meta);
+      item.appendChild(info);
+      const link = document.createElement("a");
+      link.className = "docs-item-download";
+      link.href = `/api/documents/${doc.id}/download`;
+      link.download = "";
+      link.textContent = "下载";
+      item.appendChild(link);
+      section.appendChild(item);
+    }
+    docsModalBody.appendChild(section);
+  }
+}
+
+async function loadDocuments() {
+  renderDocsLoading();
+  try {
+    const resp = await fetch("/api/documents");
+    const data = await resp.json();
+    if (!data.ok || !data.documents.length) {
+      renderDocsEmpty("暂无文档");
+      return;
+    }
+    renderDocsList(data.documents);
+  } catch {
+    renderDocsEmpty("加载失败");
+  }
+}
+
+if (docsBtn && docsModal) {
+  docsBtn.addEventListener("click", () => {
+    docsModal.hidden = false;
+    loadDocuments();
+  });
+  docsModalClose.addEventListener("click", () => { docsModal.hidden = true; });
+  docsModal.addEventListener("click", (e) => {
+    if (e.target === docsModal) docsModal.hidden = true;
+  });
+}
+
 (async function init() {
   if (ALLOWED_ATTACHMENT_EXTS.length) {
     fileInputEl.setAttribute("accept", ALLOWED_ATTACHMENT_EXTS.join(","));

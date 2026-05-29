@@ -154,6 +154,24 @@ def init_db(db_file: Path) -> None:
             """
         )
 
+        # 创建文档下载中心表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT '未分类',
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                uploaded_by TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
         # 获取当前表结构，用于数据库迁移
         message_columns = {
             str(row["name"])

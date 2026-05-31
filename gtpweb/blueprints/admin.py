@@ -356,6 +356,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         is_admin = payload.get("is_admin")
         enabled = payload.get("enabled")
         api_keys = payload.get("api_keys")
+        profile = payload.get("profile")
 
         changes: list[str] = []
 
@@ -376,8 +377,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             if is_admin is not None:
                 changes.append(f"is_admin={is_admin}")
 
-        # Handle enabled and api_keys by directly modifying users config
-        if enabled is not None or api_keys is not None:
+        # Handle enabled, api_keys, profile by directly modifying users config
+        if enabled is not None or api_keys is not None or profile is not None:
             try:
                 cfg = load_users_config(users_file)
             except (FileNotFoundError, ValueError) as exc:
@@ -399,6 +400,11 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
                     return jsonify({"ok": False, "error": "api_keys 必须是对象"}), 400
                 target["api_keys"] = {str(k): str(v) for k, v in api_keys.items() if v}
                 changes.append("api_keys")
+            if profile is not None:
+                if not isinstance(profile, dict):
+                    return jsonify({"ok": False, "error": "profile 必须是对象"}), 400
+                target["profile"] = {str(k): str(v) for k, v in profile.items()}
+                changes.append("profile")
 
             try:
                 save_users_config(users_file, cfg, require_admin=True)

@@ -107,6 +107,7 @@ export interface AdminUser {
   is_admin: boolean;
   enabled?: boolean;
   api_keys?: Record<string, string>;
+  profile?: Record<string, string>;
 }
 
 export interface DashboardStats {

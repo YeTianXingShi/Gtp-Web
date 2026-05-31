@@ -5,7 +5,11 @@
       "password": "ChangeThis123",
       "is_admin": true,
       "enabled": true,
-      "api_keys": {}
+      "api_keys": {},
+      "profile": {
+        "real_name": "管理员",
+        "position": "系统管理员"
+      }
     },
     {
       "username": "alice",
@@ -16,6 +20,12 @@
         "openai": "sk-your-openai-key",
         "google": "AIza-your-google-key",
         "claude": "sk-ant-your-claude-key"
+      },
+      "profile": {
+        "real_name": "张三",
+        "employee_id": "EMP001",
+        "position": "前端工程师",
+        "department": "技术部"
       }
     },
     {
@@ -23,7 +33,8 @@
       "password": "BobPass456",
       "is_admin": false,
       "enabled": true,
-      "api_keys": {}
+      "api_keys": {},
+      "profile": {}
     }
   ]
 }

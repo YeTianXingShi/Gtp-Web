@@ -28,6 +28,7 @@ export async function updateAdminUser(
     is_admin?: boolean;
     enabled?: boolean;
     api_keys?: Record<string, string>;
+    profile?: Record<string, string>;
   },
 ): Promise<void> {
   await apiJson<{ ok: true }>(`/api/admin/users/${encodeURIComponent(username)}`, {

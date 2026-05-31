@@ -38,6 +38,7 @@ def _normalize_user_record(raw_record: Any, index: int) -> dict[str, Any]:
     enabled = raw_record.get("enabled", True)
     api_keys = raw_record.get("api_keys", {})
     profile = raw_record.get("profile", {})
+    pwd_ver = raw_record.get("pwd_ver", 0)
 
     if not username:
         raise ValueError(f"用户配置格式错误: users[{index}].username 不能为空")
@@ -59,6 +60,7 @@ def _normalize_user_record(raw_record: Any, index: int) -> dict[str, Any]:
         "enabled": enabled,
         "api_keys": {str(k): str(v) for k, v in api_keys.items() if v},
         "profile": {str(k): str(v) for k, v in profile.items()},
+        "pwd_ver": int(pwd_ver) if isinstance(pwd_ver, (int, float)) else 0,
     }
 
 
@@ -356,6 +358,7 @@ def update_user(
         if not password:
             raise ValueError("密码不能为空")
         target_record["password"] = password
+        target_record["pwd_ver"] = int(target_record.get("pwd_ver", 0) or 0) + 1
     if is_admin is not None:
         target_record["is_admin"] = bool(is_admin)
 

@@ -79,6 +79,7 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         access, refresh, _refresh_jti, _refresh_exp = issue_tokens(
             username=str(user_record["username"]),
             is_admin=bool(user_record.get("is_admin")),
+            pwd_ver=int(user_record.get("pwd_ver", 0) or 0),
         )
 
         # 借登录的机会顺手清一下过期撤销记录，避免无限增长
@@ -131,6 +132,12 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         if user_record is None or user_record.get("enabled") is False:
             return jsonify({"ok": False, "error": "账号不存在或已禁用"}), 401
 
+        current_pwd_ver = int(user_record.get("pwd_ver", 0) or 0)
+        token_pwd_ver = int(payload.get("pwd_ver", 0) or 0)
+        if token_pwd_ver != current_pwd_ver:
+            revoke_refresh_jti(db_file, old_jti, datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc))
+            return jsonify({"ok": False, "error": "密码已变更，请重新登录"}), 401
+
         # 轮转 refresh：旧 jti 撤销，签发新 access + 新 refresh
         old_exp = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc)
         revoke_refresh_jti(db_file, old_jti, old_exp)
@@ -138,6 +145,7 @@ def create_auth_blueprint(config: AppConfig) -> Blueprint:
         access, new_refresh, _new_jti, _new_exp = issue_tokens(
             username=username,
             is_admin=bool(user_record.get("is_admin")),
+            pwd_ver=current_pwd_ver,
         )
 
         response = jsonify(

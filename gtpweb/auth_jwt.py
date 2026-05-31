@@ -53,7 +53,7 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def issue_tokens(username: str, is_admin: bool) -> tuple[str, str, str, datetime]:
+def issue_tokens(username: str, is_admin: bool, pwd_ver: int = 0) -> tuple[str, str, str, datetime]:
     """
     签发一对 access + refresh token。
 
@@ -74,6 +74,7 @@ def issue_tokens(username: str, is_admin: bool) -> tuple[str, str, str, datetime
             "iat": now,
             "exp": now + ACCESS_TTL,
             "jti": access_jti,
+            "pwd_ver": pwd_ver,
         },
         _secret(),
         algorithm=JWT_ALGORITHM,
@@ -85,6 +86,7 @@ def issue_tokens(username: str, is_admin: bool) -> tuple[str, str, str, datetime
             "iat": now,
             "exp": refresh_exp,
             "jti": refresh_jti,
+            "pwd_ver": pwd_ver,
         },
         _secret(),
         algorithm=JWT_ALGORITHM,

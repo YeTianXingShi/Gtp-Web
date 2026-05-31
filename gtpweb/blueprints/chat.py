@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-import base64
+import io
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -55,7 +55,6 @@ from gtpweb.config import AppConfig
 from gtpweb.conversation_titles import generate_conversation_title, is_default_conversation_title
 from gtpweb.db import open_db_connection
 from gtpweb.openai_stream import (
-    FileUploadError,
     build_openai_response_input,
     extract_reasoning_summary_delta,
     extract_status_error_message,
@@ -68,6 +67,23 @@ from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_file_to_markdown(file_name: str, mime_type: str, raw: bytes) -> str:
+    try:
+        from markitdown import MarkItDown, StreamInfo
+        from pathlib import Path
+        md = MarkItDown()
+        ext = Path(file_name).suffix.lower()
+        stream_info = StreamInfo(extension=ext, mimetype=mime_type, filename=file_name)
+        result = md.convert_stream(io.BytesIO(raw), stream_info=stream_info)
+        text = (result.text_content or "").strip()
+        if text:
+            logger.info("MarkItDown 解析成功: 文件=%s 字符数=%s", file_name, len(text))
+        return text
+    except Exception:
+        logger.warning("MarkItDown 解析失败: 文件=%s MIME=%s", file_name, mime_type, exc_info=True)
+        return ""
 
 
 # 友好错误提示映射：避免把上游 raw 报文（含内部 URL、API Key 提示等）原样返回前端
@@ -130,9 +146,6 @@ def _format_upstream_error(provider: str, exc: BaseException) -> tuple[str, int 
     """
     raw_message = str(exc) or exc.__class__.__name__
     status_code: int | None = None
-
-    if isinstance(exc, FileUploadError):
-        return str(exc), None, raw_message
 
     # OpenAI APIStatusError
     if isinstance(exc, APIStatusError):
@@ -465,7 +478,7 @@ def _stream_chat_response(
                 )
                 request_kwargs = {
                     "model": upstream_model,
-                    "input": build_openai_response_input(completion_messages, openai_client=openai_client),
+                    "input": build_openai_response_input(completion_messages),
                     "stream": True,
                 }
                 if reasoning_config is not None:
@@ -910,13 +923,13 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     "image_url": {"url": to_data_url(raw, mime_type)},
                 }
             else:
-                kind = "binary"
-                content_part = {
-                    "type": "file",
-                    "file_name": file_name,
-                    "mime_type": mime_type,
-                    "data": base64.b64encode(raw).decode("ascii"),
-                }
+                parsed_text = _parse_file_to_markdown(file_name, mime_type, raw)
+                if parsed_text:
+                    kind = "text"
+                    content_part = {"type": "text", "text": f"[文件: {file_name}]\n{parsed_text}\n[文件结束]"}
+                else:
+                    kind = "binary"
+                    content_part = {"type": "text", "text": f"[无法解析的文件: {file_name}]"}
 
             prepared_attachments.append(
                 {

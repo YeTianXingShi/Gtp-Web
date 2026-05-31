@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import json
-import logging
 import re
 from typing import Any, Iterable
 
@@ -67,30 +65,7 @@ def supports_openai_reasoning(model_name: str, model_patterns: Iterable[str]) ->
     return model_name_matches_patterns(model_name, model_patterns)
 
 
-logger = logging.getLogger(__name__)
-
-
-class FileUploadError(RuntimeError):
-    pass
-
-
-def _upload_to_openai_files(openai_client: Any, file_name: str, raw: bytes, mime_type: str) -> str:
-    """上传文件到 OpenAI Files API，返回 file_id。失败抛出 FileUploadError。"""
-    try:
-        result = openai_client.files.create(
-            file=(file_name, raw, mime_type),
-            purpose="responses",
-        )
-        logger.info("OpenAI 文件上传成功: 文件=%s file_id=%s 大小=%s", file_name, result.id, len(raw))
-        return result.id
-    except Exception as exc:
-        raise FileUploadError(f"文件 {file_name} 上传到 OpenAI 失败: {exc}") from exc
-
-
-def _build_response_input_content(
-    content: Any,
-    openai_client: Any = None,
-) -> str | list[dict[str, Any]]:
+def _build_response_input_content(content: Any) -> str | list[dict[str, Any]]:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -113,49 +88,20 @@ def _build_response_input_content(
             url = image_url.get("url")
             if not isinstance(url, str) or not url:
                 continue
-            if openai_client and url.startswith("data:"):
-                match = _DATA_URL_RE.match(url)
-                if match:
-                    raw = base64.b64decode(match.group("data"))
-                    mime = match.group("mime")
-                    fid = _upload_to_openai_files(openai_client, "image.png", raw, mime)
-                    converted.append({"type": "input_image", "file_id": fid, "detail": "auto"})
-                    continue
             converted.append({"type": "input_image", "image_url": url, "detail": "auto"})
-            continue
-        if item_type == "file":
-            file_data_b64 = item.get("data", "")
-            file_mime = str(item.get("mime_type", "application/octet-stream"))
-            file_name = str(item.get("file_name", "file"))
-            if not file_data_b64:
-                continue
-            raw = base64.b64decode(file_data_b64)
-            if openai_client:
-                fid = _upload_to_openai_files(openai_client, file_name, raw, file_mime)
-                converted.append({"type": "input_file", "file_id": fid, "filename": file_name})
-            else:
-                converted.append({
-                    "type": "input_file",
-                    "filename": file_name,
-                    "file_data": f"data:{file_mime};base64,{file_data_b64}",
-                })
 
     return converted if converted else ""
 
 
-_DATA_URL_RE = re.compile(r"^data:(?P<mime>[^;]+);base64,(?P<data>.+)$", re.DOTALL)
-
-
 def build_openai_response_input(
     messages: list[dict[str, Any]],
-    openai_client: Any = None,
 ) -> list[dict[str, Any]]:
     response_input: list[dict[str, Any]] = []
     for message in messages:
         role = str(message.get("role", "user")).strip().lower() or "user"
         if role not in {"user", "assistant", "system", "developer"}:
             continue
-        content = _build_response_input_content(message.get("content"), openai_client=openai_client)
+        content = _build_response_input_content(message.get("content"))
         if content == "":
             continue
 

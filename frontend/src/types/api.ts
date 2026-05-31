@@ -80,6 +80,7 @@ export interface MessageAttachment {
   kind: "image" | "text" | "binary";
   is_image: boolean;
   preview_url: string | null;
+  download_url: string;
   created_at: string;
 }
 

@@ -24,16 +24,19 @@ export function ChatPage() {
   const [thinkingLevel, setThinkingLevel] = useState<string>("");
 
   const queryClient = useQueryClient();
+
+  const refreshAfterStream = () => {
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    if (currentConversationId != null) {
+      queryClient.invalidateQueries({
+        queryKey: ["conversation-messages", currentConversationId],
+      });
+    }
+  };
+
   const stream = useChatStream({
-    onDone: () => {
-      // 流式完成后刷新会话列表（拿到最新标题）和当前消息列表
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
-      if (currentConversationId != null) {
-        queryClient.invalidateQueries({
-          queryKey: ["conversation-messages", currentConversationId],
-        });
-      }
-    },
+    onDone: refreshAfterStream,
+    onError: refreshAfterStream,
   });
 
   useEffect(() => {

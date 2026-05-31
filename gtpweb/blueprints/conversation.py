@@ -547,6 +547,7 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 ).fetchall()
                 for att in attachment_rows:
                     is_image = str(att["kind"]) == "image"
+                    att_url = f"/api/attachments/{att['id']}/content"
                     attachment_map[int(att["message_id"])].append(
                         {
                             "id": att["id"],
@@ -554,9 +555,8 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                             "mime_type": att["mime_type"],
                             "kind": att["kind"],
                             "is_image": is_image,
-                            "preview_url": (
-                                f"/api/attachments/{att['id']}/content" if is_image else None
-                            ),
+                            "preview_url": att_url if is_image else None,
+                            "download_url": att_url,
                             "created_at": att["created_at"],
                         }
                     )

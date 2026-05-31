@@ -24,6 +24,7 @@ const FLUSH_INTERVAL_MS = 50;
 
 interface UseChatStreamOptions {
   onDone?: (reply: string) => void;
+  onError?: () => void;
   onUsage?: (input: number, output: number) => void;
 }
 
@@ -108,6 +109,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}) {
             pendingUserMessage: prev.pendingUserMessage,
             pendingFileNames: prev.pendingFileNames,
           }));
+          opts.onError?.();
         },
       });
     },
@@ -158,6 +160,7 @@ export function useChatStream(opts: UseChatStreamOptions = {}) {
             reasoning: reasoningRef.current,
             error,
           });
+          opts.onError?.();
         },
       });
     },

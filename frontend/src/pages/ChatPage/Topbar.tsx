@@ -26,6 +26,15 @@ interface EffortConfig {
   label: string;
 }
 
+const EFFORT_LABELS: Record<string, string> = {
+  minimal: "最小",
+  low: "轻量",
+  medium: "标准",
+  high: "深度",
+  xhigh: "极致",
+  max: "最大",
+};
+
 function detectEffortConfig(option: ModelOption | undefined): EffortConfig {
   if (!option) return { enabled: false, options: [], type: null, label: "" };
 
@@ -34,7 +43,7 @@ function detectEffortConfig(option: ModelOption | undefined): EffortConfig {
       enabled: true,
       options: option.reasoning.effort_options,
       type: "reasoning_effort",
-      label: option.provider === "claude" ? "Thinking" : "Effort",
+      label: option.provider === "claude" ? "思考强度" : "推理强度",
     };
   }
   if (option.thinking?.enabled && option.thinking.level_options.length) {
@@ -42,7 +51,7 @@ function detectEffortConfig(option: ModelOption | undefined): EffortConfig {
       enabled: true,
       options: option.thinking.level_options,
       type: "thinking_level",
-      label: "Thinking",
+      label: "思考等级",
     };
   }
   return { enabled: false, options: [], type: null, label: "" };
@@ -127,7 +136,7 @@ export function Topbar({
               size="small"
               value={effortValue}
               onChange={handleEffortChange}
-              options={effort.options.map((o) => ({ value: o, label: o }))}
+              options={effort.options.map((o) => ({ value: o, label: EFFORT_LABELS[o] || o }))}
             />
           </>
         )}

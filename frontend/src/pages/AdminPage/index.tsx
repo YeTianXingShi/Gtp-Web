@@ -6,6 +6,7 @@ import { DashboardTab } from "./DashboardTab";
 import { UsersTab } from "./UsersTab";
 import { UsageTab } from "./UsageTab";
 import { DocumentsTab } from "./DocumentsTab";
+import { ModelTab } from "./ModelTab";
 import { ConfigTab } from "./ConfigTab";
 import { AuditTab } from "./AuditTab";
 import { LogoTab } from "./LogoTab";
@@ -52,7 +53,8 @@ export function AdminPage() {
               { key: "users", label: "账号管理", children: <UsersTab /> },
               { key: "usage", label: "用量统计", children: <UsageTab /> },
               { key: "documents", label: "文档管理", children: <DocumentsTab /> },
-              { key: "config", label: "配置管理", children: <ConfigTab /> },
+              { key: "models", label: "模型配置", children: <ModelTab /> },
+              { key: "config", label: "配置文件", children: <ConfigTab /> },
               { key: "logo", label: "Logo 管理", children: <LogoTab /> },
               { key: "audit", label: "审计日志", children: <AuditTab /> },
             ]}

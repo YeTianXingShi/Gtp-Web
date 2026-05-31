@@ -405,6 +405,7 @@ def _load_completion_messages(
     *,
     conversation_id: int,
     max_text_file_chars: int,
+    max_context_messages: int = 0,
     up_to_message_id: int | None = None,
 ) -> list[dict[str, Any]]:
     query = """
@@ -416,9 +417,12 @@ def _load_completion_messages(
     if isinstance(up_to_message_id, int):
         query += " AND id <= ?"
         params.append(up_to_message_id)
-    query += " ORDER BY id ASC"
+    query += " ORDER BY id DESC"
+    if max_context_messages > 0:
+        query += " LIMIT ?"
+        params.append(max_context_messages)
 
-    rows = conn.execute(query, tuple(params)).fetchall()
+    rows = list(reversed(conn.execute(query, tuple(params)).fetchall()))
     completion_messages: list[dict[str, Any]] = []
     for row in rows:
         msg_attachments = load_message_attachments(conn, int(row["id"]))
@@ -977,8 +981,8 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 conn,
                 conversation_id=conversation_id,
                 max_text_file_chars=max_text_file_chars,
+                max_context_messages=runtime_settings.max_context_messages,
             )
-
             count_row = conn.execute(
                 "SELECT COUNT(1) AS total FROM messages WHERE conversation_id = ?",
                 (conversation_id,),
@@ -1177,6 +1181,7 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                 conn,
                 conversation_id=conversation_id,
                 max_text_file_chars=max_text_file_chars,
+                max_context_messages=runtime_settings.max_context_messages,
                 up_to_message_id=retry_user_message_id,
             )
             logger.info(

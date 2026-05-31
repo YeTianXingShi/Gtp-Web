@@ -201,6 +201,7 @@ class AppConfig:
     max_upload_bytes: int
     max_attachments_per_message: int
     max_text_file_chars: int
+    max_context_messages: int
     allowed_attachment_exts: set[str]
     models: list[str]
     model_options: tuple[ModelOption, ...]
@@ -873,6 +874,7 @@ def load_config() -> AppConfig:
     max_upload_bytes = max_upload_mb * 1024 * 1024
     max_attachments_per_message = safe_int(os.getenv("MAX_ATTACHMENTS_PER_MESSAGE", "5")) or 5
     max_text_file_chars = safe_int(os.getenv("MAX_TEXT_FILE_CHARS", "12000")) or 12000
+    max_context_messages = safe_int(os.getenv("MAX_CONTEXT_MESSAGES", "20")) or 20
     allowed_attachment_exts = parse_allowed_attachment_exts(os.getenv("ALLOWED_ATTACHMENT_EXTS", ""))
 
     # 构建模型选项
@@ -928,6 +930,7 @@ def load_config() -> AppConfig:
         max_upload_bytes=max_upload_bytes,
         max_attachments_per_message=max_attachments_per_message,
         max_text_file_chars=max_text_file_chars,
+        max_context_messages=max_context_messages,
         allowed_attachment_exts=allowed_attachment_exts,
         models=models,
         model_options=model_options,

@@ -34,6 +34,7 @@ HOT_RELOADABLE_ENV_KEYS = {
     "MAX_UPLOAD_MB",
     "MAX_ATTACHMENTS_PER_MESSAGE",
     "MAX_TEXT_FILE_CHARS",
+    "MAX_CONTEXT_MESSAGES",
     "ALLOWED_ATTACHMENT_EXTS",
 }
 
@@ -55,6 +56,7 @@ class RuntimeSettings:
     max_upload_bytes: int
     max_attachments_per_message: int
     max_text_file_chars: int
+    max_context_messages: int
     allowed_attachment_exts: set[str]
 
 
@@ -160,6 +162,7 @@ def build_runtime_settings(
         base_config.max_attachments_per_message,
     )
     max_text_file_chars = choose_int("MAX_TEXT_FILE_CHARS", base_config.max_text_file_chars)
+    max_context_messages = choose_int("MAX_CONTEXT_MESSAGES", base_config.max_context_messages)
     allowed_attachment_exts = choose_allowed_exts(base_config.allowed_attachment_exts)
 
     return RuntimeSettings(
@@ -178,6 +181,7 @@ def build_runtime_settings(
         max_upload_bytes=max_upload_mb * 1024 * 1024,
         max_attachments_per_message=max_attachments_per_message,
         max_text_file_chars=max_text_file_chars,
+        max_context_messages=max_context_messages,
         allowed_attachment_exts=allowed_attachment_exts,
     )
 

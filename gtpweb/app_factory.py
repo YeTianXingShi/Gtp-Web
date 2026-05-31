@@ -39,6 +39,7 @@ def build_openai_client(**kwargs: Any) -> OpenAI:
     Returns:
         OpenAI: 配置好的 OpenAI 客户端实例
     """
+    kwargs.setdefault("max_retries", 0)
     return OpenAI(**kwargs)
 
 
@@ -91,7 +92,7 @@ def build_claude_client(*, api_key: str, base_url: str = "") -> Any:
             "当前环境缺少 `anthropic` 依赖，请先执行 `pip install -r requirements.txt`。"
         ) from exc
 
-    client_kwargs: dict[str, Any] = {"api_key": api_key}
+    client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": 0}
     if base_url:
         client_kwargs["base_url"] = base_url
     return anthropic.Anthropic(**client_kwargs)

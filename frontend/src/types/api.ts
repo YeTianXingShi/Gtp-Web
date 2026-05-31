@@ -29,24 +29,17 @@ export interface ModelOption {
   label: string;
   provider: "openai" | "google" | "claude";
   model_name: string;
-  // 透传 reasoning / thinking 设置（按 provider 不同字段）
-  openai_reasoning?: {
+  reasoning?: {
     enabled: boolean;
     effort: string;
     summary: string;
     effort_options: string[];
   } | null;
-  google_thinking?: {
+  thinking?: {
     enabled: boolean;
     include_thoughts: boolean;
     level: string;
     level_options: string[];
-  } | null;
-  claude_thinking?: {
-    enabled: boolean;
-    effort: string;
-    effort_options: string[];
-    include_thoughts: boolean;
   } | null;
 }
 

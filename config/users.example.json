@@ -3,12 +3,27 @@
     {
       "username": "admin",
       "password": "ChangeThis123",
-      "is_admin": true
+      "is_admin": true,
+      "enabled": true,
+      "api_keys": {}
     },
     {
       "username": "alice",
       "password": "AlicePass123",
-      "is_admin": false
+      "is_admin": false,
+      "enabled": true,
+      "api_keys": {
+        "openai": "sk-your-openai-key",
+        "google": "AIza-your-google-key",
+        "claude": "sk-ant-your-claude-key"
+      }
+    },
+    {
+      "username": "bob",
+      "password": "BobPass456",
+      "is_admin": false,
+      "enabled": true,
+      "api_keys": {}
     }
   ]
 }

@@ -8,7 +8,6 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden;
 }
 
 /* 全局隐藏滚动条但保留滚动功能 */
@@ -30,10 +29,10 @@ body,
   background: rgba(0, 0, 0, 0.25);
 }
 
-/* Ant Design Layout 内部滚动条隐藏 */
-.ant-layout,
-.ant-layout-sider,
-.ant-layout-content {
+/* 聊天页专用：禁止 Ant Layout 产生外层滚动条 */
+.chat-layout > .ant-layout,
+.chat-layout > .ant-layout > .ant-layout-sider,
+.chat-layout > .ant-layout > .ant-layout-content {
   overflow: hidden !important;
 }
 

@@ -73,7 +73,7 @@ export function ChatPage() {
 
   return (
     <ChatStreamContext.Provider value={stream}>
-      <Layout style={{ height: "100vh", overflow: "hidden" }}>
+      <Layout className="chat-layout" style={{ height: "100vh", overflow: "hidden" }}>
         <Topbar
           bootstrap={bootstrap}
           selectedModel={selectedModel}

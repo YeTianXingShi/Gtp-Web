@@ -55,6 +55,7 @@ from gtpweb.config import AppConfig
 from gtpweb.conversation_titles import generate_conversation_title, is_default_conversation_title
 from gtpweb.db import open_db_connection
 from gtpweb.openai_stream import (
+    FileUploadError,
     build_openai_response_input,
     extract_reasoning_summary_delta,
     extract_status_error_message,
@@ -129,6 +130,9 @@ def _format_upstream_error(provider: str, exc: BaseException) -> tuple[str, int 
     """
     raw_message = str(exc) or exc.__class__.__name__
     status_code: int | None = None
+
+    if isinstance(exc, FileUploadError):
+        return str(exc), None, raw_message
 
     # OpenAI APIStatusError
     if isinstance(exc, APIStatusError):
@@ -461,7 +465,7 @@ def _stream_chat_response(
                 )
                 request_kwargs = {
                     "model": upstream_model,
-                    "input": build_openai_response_input(completion_messages),
+                    "input": build_openai_response_input(completion_messages, openai_client=openai_client),
                     "stream": True,
                 }
                 if reasoning_config is not None:

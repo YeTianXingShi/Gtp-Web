@@ -28,27 +28,20 @@ interface EffortConfig {
 
 function detectEffortConfig(option: ModelOption | undefined): EffortConfig {
   if (!option) return { enabled: false, options: [], type: null, label: "" };
-  if (option.openai_reasoning?.enabled && option.openai_reasoning.effort_options.length) {
+
+  if (option.reasoning?.enabled && option.reasoning.effort_options.length) {
     return {
       enabled: true,
-      options: option.openai_reasoning.effort_options,
+      options: option.reasoning.effort_options,
       type: "reasoning_effort",
-      label: "Effort",
+      label: option.provider === "claude" ? "Thinking" : "Effort",
     };
   }
-  if (option.google_thinking?.enabled && option.google_thinking.level_options.length) {
+  if (option.thinking?.enabled && option.thinking.level_options.length) {
     return {
       enabled: true,
-      options: option.google_thinking.level_options,
+      options: option.thinking.level_options,
       type: "thinking_level",
-      label: "Thinking",
-    };
-  }
-  if (option.claude_thinking?.enabled && option.claude_thinking.effort_options.length) {
-    return {
-      enabled: true,
-      options: option.claude_thinking.effort_options,
-      type: "reasoning_effort",
       label: "Thinking",
     };
   }

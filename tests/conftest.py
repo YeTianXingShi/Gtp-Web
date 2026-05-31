@@ -46,6 +46,20 @@ class _FakeResponses:
         return _FakeResponsesStream(self._response_events)
 
 
+class _FakeFileObject:
+    def __init__(self, file_id: str):
+        self.id = file_id
+
+
+class _FakeFiles:
+    def __init__(self):
+        self._counter = 0
+
+    def create(self, **_kwargs):
+        self._counter += 1
+        return _FakeFileObject(f"file-fake-{self._counter}")
+
+
 class _FakeOpenAI:
     def __init__(
         self,
@@ -60,6 +74,7 @@ class _FakeOpenAI:
             response_events
             or [{"type": "response.output_text.delta", "delta": stream_text}],
         )
+        self.files = _FakeFiles()
 
 
 class _FakeGoogleChunk:

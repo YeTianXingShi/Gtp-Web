@@ -154,8 +154,7 @@ class AppConfig:
         users_file: 用户配置文件路径
         users: 用户名到密码哈希的映射
         model_config_file: 模型配置文件路径
-        magic_login_secret: 免登录链接签名密钥
-        magic_login_default_max_age: 免登录链接默认有效期（秒）
+        jwt_secret: JWT 签名密钥（独立于 secret_key，便于单独轮换）
         openai_base_url: OpenAI API 基础 URL
         openai_api_key: OpenAI API 密钥
         openai_models: OpenAI 模型列表
@@ -186,8 +185,7 @@ class AppConfig:
     users_file: Path
     users: dict[str, str]
     model_config_file: Path
-    magic_login_secret: str
-    magic_login_default_max_age: int
+    jwt_secret: str
     openai_base_url: str
     openai_api_key: str
     openai_models: list[str]
@@ -846,10 +844,10 @@ def load_config() -> AppConfig:
     model_config_file = _resolve_project_path(os.getenv("MODEL_CONFIG_FILE", str(DEFAULT_MODEL_CONFIG_FILE)))
     model_catalog = load_model_catalog(model_config_file)
 
-    magic_login_secret = os.getenv("MAGIC_LOGIN_SECRET", "").strip() or os.getenv(
+    # JWT 签名密钥：独立配置 JWT_SECRET，未配置则派生自 APP_SECRET_KEY，便于单独轮换
+    jwt_secret = os.getenv("JWT_SECRET", "").strip() or os.getenv(
         "APP_SECRET_KEY", "dev-secret-change-me"
     )
-    magic_login_default_max_age = safe_int(os.getenv("MAGIC_LOGIN_DEFAULT_MAX_AGE", "604800")) or 604800
 
     # OpenAI 配置
     openai_base_url = os.getenv("OPENAI_BASE_URL", "").strip()
@@ -914,8 +912,7 @@ def load_config() -> AppConfig:
         users_file=users_file,
         users=users,
         model_config_file=model_config_file,
-        magic_login_secret=magic_login_secret,
-        magic_login_default_max_age=magic_login_default_max_age,
+        jwt_secret=jwt_secret,
         openai_base_url=openai_base_url,
         openai_api_key=openai_api_key,
         openai_models=openai_models,

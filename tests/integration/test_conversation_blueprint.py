@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from tests.conftest import _AuthedClient
+
 
 def _create_conversation(client, model: str = "openai:gpt-4o-mini") -> int:
     create_resp = client.post("/api/conversations", json={"model": model})
@@ -29,9 +31,11 @@ def _create_reasoning_conversation(app_builder):
             {"type": "response.output_text.delta", "delta": "这是最终回复。"},
         ],
     )
-    client = app.test_client()
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
+    raw_client = app.test_client()
+    login_resp = raw_client.post("/api/login", json={"username": "u", "password": "p"})
     assert login_resp.status_code == 200
+    login_data = login_resp.get_json()
+    client = _AuthedClient(raw_client, access_token=login_data["access_token"], user=login_data["user"])
 
     conv_id = _create_conversation(client, model="openai:gpt-5-mini")
     stream_resp = client.post(

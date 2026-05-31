@@ -17,7 +17,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from uuid import uuid4
 
-from flask import Flask, g, has_request_context, request, session
+from flask import Flask, g, has_request_context, request
 
 from gtpweb.config import AppConfig
 
@@ -62,9 +62,11 @@ class RequestContextFilter(logging.Filter):
         record.username = "-"
         if has_request_context():
             record.request_id = str(getattr(g, "request_id", "-") or "-")
-            username = session.get("username")
-            if isinstance(username, str) and username:
-                record.username = username
+            user = getattr(g, "user", None)
+            if isinstance(user, dict):
+                username = user.get("username")
+                if isinstance(username, str) and username:
+                    record.username = username
         return True
 
 

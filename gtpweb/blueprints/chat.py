@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -18,7 +19,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from flask import Blueprint, Response, jsonify, request, session, stream_with_context
+from flask import Blueprint, Response, g, jsonify, request, stream_with_context
 from openai import APIStatusError, OpenAIError
 from werkzeug.datastructures import FileStorage
 
@@ -39,21 +40,17 @@ from gtpweb.ai_providers import (
     resolve_model_option,
 )
 from gtpweb.attachments import (
-    build_file_text_block,
     build_message_content_for_model,
     build_user_display_content,
-    decode_text_bytes,
-    extract_document_text,
     infer_mime_type,
-    is_excel_attachment,
     is_image_attachment,
-    is_text_attachment,
-    is_word_attachment,
     load_message_attachments,
     normalize_uploaded_file_name,
     to_data_url,
     validate_attachment,
 )
+from gtpweb.audit import log_audit
+from gtpweb.auth_jwt import require_login
 from gtpweb.config import AppConfig
 from gtpweb.conversation_titles import generate_conversation_title, is_default_conversation_title
 from gtpweb.db import open_db_connection
@@ -70,6 +67,90 @@ from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename, safe_int
 
 logger = logging.getLogger(__name__)
+
+
+# 友好错误提示映射：避免把上游 raw 报文（含内部 URL、API Key 提示等）原样返回前端
+_PROVIDER_LABEL = {
+    PROVIDER_OPENAI: "OpenAI",
+    PROVIDER_GOOGLE: "Google Gemini",
+    PROVIDER_CLAUDE: "Claude",
+}
+
+
+def _friendly_message_by_status(provider: str, status_code: int | None) -> str:
+    """根据 HTTP 状态码返回脱敏后的中文友好提示。"""
+    label = _PROVIDER_LABEL.get(provider, "AI 服务")
+    if status_code is None:
+        return f"{label} 服务暂不可用，请稍后重试"
+    if status_code == 401:
+        return f"{label} API Key 无效或已过期，请联系管理员检查配置"
+    if status_code == 403:
+        return f"{label} 拒绝访问，可能是当前账号无权使用该模型，或地区/网络受限"
+    if status_code == 404:
+        return f"{label} 找不到该模型，可能模型名拼写有误或已下线"
+    if status_code == 408:
+        return f"{label} 响应超时，请稍后重试"
+    if status_code == 429:
+        return f"{label} 请求过于频繁或额度已用尽，请稍后重试"
+    if status_code == 502:
+        return f"{label} 网关错误，可能是附件过大或格式不受支持，请减小文件体积或改用其他模型重试"
+    if status_code in (500, 503, 504):
+        return f"{label} 服务暂时不可用，请稍后重试"
+    if 400 <= status_code < 500:
+        return f"{label} 拒绝了本次请求 (HTTP {status_code})，请检查输入或联系管理员"
+    return f"{label} 调用失败 (HTTP {status_code})，请稍后重试"
+
+
+def _extract_anthropic_status(exc: Any) -> tuple[int | None, str | None]:
+    """从 anthropic.APIStatusError / 通用 HTTP 异常中提取状态码与 raw 消息（仅用于日志）。"""
+    status_code = getattr(exc, "status_code", None)
+    if not isinstance(status_code, int):
+        # anthropic 1.x 可能挂在 .response.status_code
+        response = getattr(exc, "response", None)
+        if response is not None:
+            sc = getattr(response, "status_code", None)
+            if isinstance(sc, int):
+                status_code = sc
+    raw_msg: str | None = None
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err_obj = body.get("error")
+        if isinstance(err_obj, dict):
+            raw_msg = str(err_obj.get("message") or "")
+    if not raw_msg:
+        raw_msg = str(exc) or None
+    return status_code, raw_msg
+
+
+def _format_upstream_error(provider: str, exc: BaseException) -> tuple[str, int | None, str]:
+    """
+    把任意上游异常转成 (前端可见消息, status_code, 日志原文)。
+    前端消息已脱敏；status_code 与 raw_message 仅用于服务端日志。
+    """
+    raw_message = str(exc) or exc.__class__.__name__
+    status_code: int | None = None
+
+    # OpenAI APIStatusError
+    if isinstance(exc, APIStatusError):
+        status_code, raw_message = extract_status_error_message(exc)
+
+    # Anthropic / Claude：通过 duck-typing 检测，避免把 anthropic 设为硬依赖
+    elif exc.__class__.__module__.startswith("anthropic"):
+        status_code, raw = _extract_anthropic_status(exc)
+        if raw:
+            raw_message = raw
+
+    # Google google-genai：errors.APIError 系列
+    elif exc.__class__.__module__.startswith("google."):
+        sc = getattr(exc, "code", None)
+        if isinstance(sc, int):
+            status_code = sc
+        # google-genai 的 APIError 通常 str(exc) 已是 JSON，截断保留前 300 字符做日志
+        raw_message = (str(exc) or raw_message)[:500]
+
+    friendly = _friendly_message_by_status(provider, status_code)
+    return friendly, status_code, raw_message
+
 
 _TITLE_UPDATE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="title-update")
 
@@ -100,14 +181,9 @@ def _build_openai_reasoning_config(
     return config or None
 
 
-def _get_current_user(users_file: Path) -> str | None:
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None
-    record = get_user_record(users_file, username)
-    if record is None:
-        return None
-    return str(record["username"])
+def _get_current_username() -> str:
+    """从 g 读取当前用户名。需配合 @require_login 使用。"""
+    return str(g.user["username"])
 
 
 def _insert_message_attachments(
@@ -383,85 +459,50 @@ def _stream_chat_response(
                 reasoning_config = _build_openai_reasoning_config(
                     reasoning_settings=effective_openai_reasoning,
                 )
+                request_kwargs = {
+                    "model": upstream_model,
+                    "input": build_openai_response_input(completion_messages),
+                    "stream": True,
+                }
                 if reasoning_config is not None:
-                    request_kwargs = {
-                        "model": upstream_model,
-                        "input": build_openai_response_input(completion_messages),
-                        "reasoning": reasoning_config,
-                        "stream": True,
-                    }
-                    stream = openai_client.responses.create(**request_kwargs)
-                    for event_obj in stream:
-                        reasoning_delta = extract_reasoning_summary_delta(event_obj)
-                        if reasoning_delta:
-                            reasoning_parts.append(reasoning_delta)
-                            yield sse_payload({"type": "reasoning", "text": reasoning_delta})
+                    request_kwargs["reasoning"] = reasoning_config
+                stream = openai_client.responses.create(**request_kwargs)
+                for event_obj in stream:
+                    reasoning_delta = extract_reasoning_summary_delta(event_obj)
+                    if reasoning_delta:
+                        reasoning_parts.append(reasoning_delta)
+                        yield sse_payload({"type": "reasoning", "text": reasoning_delta})
 
-                        delta = extract_text_delta(event_obj)
-                        if delta:
-                            assistant_parts.append(delta)
-                            delta_count += 1
-                            if delta_count % 20 == 0:
-                                logger.debug(
-                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                    conversation_id,
-                                    delta_count,
-                                    len("".join(assistant_parts)),
-                                )
-                            yield sse_payload({"type": "delta", "text": delta})
+                    delta = extract_text_delta(event_obj)
+                    if delta:
+                        assistant_parts.append(delta)
+                        delta_count += 1
+                        if delta_count % 20 == 0:
+                            logger.debug(
+                                "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
+                                conversation_id,
+                                delta_count,
+                                len("".join(assistant_parts)),
+                            )
+                        yield sse_payload({"type": "delta", "text": delta})
 
-                        evt_type = getattr(event_obj, "type", "") if not isinstance(event_obj, dict) else event_obj.get("type", "")
-                        if evt_type == "response.completed":
-                            resp_obj = getattr(event_obj, "response", None)
-                            if resp_obj is not None:
-                                usage_obj = getattr(resp_obj, "usage", None)
-                                if usage_obj is not None:
-                                    usage_input_tokens = getattr(usage_obj, "input_tokens", 0) or 0
-                                    usage_output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
+                    evt_type = getattr(event_obj, "type", "") if not isinstance(event_obj, dict) else event_obj.get("type", "")
+                    if evt_type == "response.completed":
+                        resp_obj = getattr(event_obj, "response", None)
+                        if resp_obj is not None:
+                            usage_obj = getattr(resp_obj, "usage", None)
+                            if usage_obj is not None:
+                                usage_input_tokens = getattr(usage_obj, "input_tokens", 0) or 0
+                                usage_output_tokens = getattr(usage_obj, "output_tokens", 0) or 0
 
-                    if not assistant_parts and not has_error:
-                        has_error = True
-                        yield sse_payload(
-                            {
-                                "type": "error",
-                                "error": "请求上游成功但未收到流式文本，请确认网关支持 Responses API 流式。",
-                            }
-                        )
-                else:
-                    request_kwargs = {
-                        "model": upstream_model,
-                        "messages": completion_messages,
-                        "stream": True,
-                        "stream_options": {"include_usage": True},
-                    }
-                    stream = openai_client.chat.completions.create(**request_kwargs)
-                    for event_obj in stream:
-                        delta = extract_text_delta(event_obj)
-                        if delta:
-                            assistant_parts.append(delta)
-                            delta_count += 1
-                            if delta_count % 20 == 0:
-                                logger.debug(
-                                    "流式返回进度: 会话ID=%s 分片数=%s 已累计字符=%s",
-                                    conversation_id,
-                                    delta_count,
-                                    len("".join(assistant_parts)),
-                                )
-                            yield sse_payload({"type": "delta", "text": delta})
-
-                        chunk_usage = getattr(event_obj, "usage", None)
-                        if chunk_usage is not None:
-                            usage_input_tokens = getattr(chunk_usage, "prompt_tokens", 0) or 0
-                            usage_output_tokens = getattr(chunk_usage, "completion_tokens", 0) or 0
-
-                    if not assistant_parts and not has_error:
-                        has_error = True
-                        yield sse_payload(
-                            {
-                                "type": "error",
-                                "error": "请求上游成功但未收到流式文本，请确认网关支持 chat.completions 流式。",
-                            }
-                        )
+                if not assistant_parts and not has_error:
+                    has_error = True
+                    yield sse_payload(
+                        {
+                            "type": "error",
+                            "error": "请求上游成功但未收到流式文本，请确认网关支持 Responses API 流式。",
+                        }
+                    )
             elif selected_provider == PROVIDER_GOOGLE:
                 if google_client is None:
                     raise RuntimeError("Google Gemini 客户端未初始化，请检查 GOOGLE 配置。")
@@ -595,20 +636,15 @@ def _stream_chat_response(
 
         except APIStatusError as exc:
             has_error = True
-            status_code, message = extract_status_error_message(exc)
-            status = status_code if status_code is not None else "unknown"
+            friendly, status_code, raw_message = _format_upstream_error(selected_provider, exc)
             logger.warning(
-                "上游接口错误: 会话ID=%s 状态=%s 信息=%s",
+                "上游接口错误: 会话ID=%s 来源=%s 状态=%s 原始信息=%s",
                 conversation_id,
-                status,
-                message,
+                selected_provider,
+                status_code if status_code is not None else "unknown",
+                raw_message,
             )
-            yield sse_payload(
-                {
-                    "type": "error",
-                    "error": f"{runtime_settings.openai_base_url} ({status}): {message}",
-                }
-            )
+            yield sse_payload({"type": "error", "error": friendly})
         except GeneratorExit:
             client_disconnected = True
             logger.info("聊天流连接已断开: 会话ID=%s（客户端可能已关闭连接）", conversation_id)
@@ -616,15 +652,28 @@ def _stream_chat_response(
         except OpenAIError as exc:
             has_error = True
             logger.exception("OpenAI SDK 调用异常: 会话ID=%s", conversation_id)
-            yield sse_payload({"type": "error", "error": f"OpenAI SDK 调用失败: {exc}"})
+            friendly, _, _ = _format_upstream_error(PROVIDER_OPENAI, exc)
+            yield sse_payload({"type": "error", "error": friendly})
         except Exception as exc:
             has_error = True
-            if selected_provider == PROVIDER_GOOGLE:
-                logger.exception("Google Gemini SDK 调用异常: 会话ID=%s", conversation_id)
-                yield sse_payload({"type": "error", "error": f"Google Gemini 调用失败: {exc}"})
+            friendly, status_code, raw_message = _format_upstream_error(selected_provider, exc)
+            if exc.__class__.__module__.startswith("anthropic") or exc.__class__.__module__.startswith("google."):
+                logger.warning(
+                    "上游接口错误: 会话ID=%s 来源=%s 状态=%s 原始信息=%s",
+                    conversation_id,
+                    selected_provider,
+                    status_code if status_code is not None else "unknown",
+                    raw_message,
+                )
             else:
-                logger.exception("聊天流内部异常: 会话ID=%s", conversation_id)
-                yield sse_payload({"type": "error", "error": f"服务内部错误: {exc}"})
+                logger.exception(
+                    "上游 SDK 调用异常: 会话ID=%s 来源=%s 状态=%s 原始信息=%s",
+                    conversation_id,
+                    selected_provider,
+                    status_code if status_code is not None else "unknown",
+                    raw_message,
+                )
+            yield sse_payload({"type": "error", "error": friendly})
         finally:
             assistant_text = "".join(assistant_parts).strip()
             assistant_attachments: list[dict[str, Any]] = []
@@ -663,7 +712,10 @@ def _stream_chat_response(
                     len(assistant_attachments),
                 )
                 if not client_disconnected:
-                    yield sse_payload({"type": "done", "reply": stored_text})
+                    if has_error:
+                        yield sse_payload({"type": "done", "reply": stored_text, "partial": True})
+                    else:
+                        yield sse_payload({"type": "done", "reply": stored_text})
 
                 if usage_input_tokens > 0 or usage_output_tokens > 0:
                     try:
@@ -687,7 +739,7 @@ def _stream_chat_response(
                     conversation_id,
                     has_error,
                 )
-                if not client_disconnected:
+                if (not has_error) and (not client_disconnected):
                     yield sse_payload({"type": "done", "reply": ""})
 
     return Response(
@@ -709,10 +761,9 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
     upload_dir = config.upload_dir
 
     @bp.post("/api/chat/stream")
+    @require_login
     def chat_stream() -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _get_current_username()
 
         runtime_state = get_runtime_state()
         runtime_settings = runtime_state.settings
@@ -793,6 +844,16 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             content_type,
         )
 
+        log_audit(
+            db_file,
+            username=username,
+            action="chat",
+            target_type="conversation",
+            target_id=str(conversation_id or "new"),
+            detail=f"model={model} files={len(uploaded_files)}",
+            ip_address=request.remote_addr or "",
+        )
+
         if not content and not uploaded_files:
             return jsonify({"ok": False, "error": "消息内容和附件不能同时为空"}), 400
 
@@ -834,16 +895,6 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
             if not mime_type or mime_type == "application/octet-stream":
                 mime_type = infer_mime_type(file_name)
 
-            ok, error_message = validate_attachment(file_name, mime_type, allowed_attachment_exts)
-            if not ok:
-                logger.warning(
-                    "附件校验失败: 文件=%s MIME=%s 原因=%s",
-                    file_name,
-                    mime_type,
-                    error_message,
-                )
-                return jsonify({"ok": False, "error": error_message}), 400
-
             parsed_text = ""
             kind = "binary"
             content_part: dict[str, Any]
@@ -854,27 +905,14 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
                     "type": "image_url",
                     "image_url": {"url": to_data_url(raw, mime_type)},
                 }
-            elif is_word_attachment(file_name) or is_excel_attachment(file_name):
-                kind = "text"
-                try:
-                    extracted = extract_document_text(file_name, raw)
-                except Exception as exc:
-                    logger.exception(
-                        "附件解析异常: 文件=%s MIME=%s",
-                        file_name,
-                        mime_type,
-                    )
-                    return jsonify({"ok": False, "error": f"文件解析失败（{file_name}）：{exc}"}), 400
-                parsed_text = build_file_text_block(file_name, extracted, max_text_file_chars)
-                content_part = {"type": "text", "text": parsed_text}
-            elif is_text_attachment(file_name, mime_type):
-                kind = "text"
-                text = decode_text_bytes(raw)
-                parsed_text = build_file_text_block(file_name, text, max_text_file_chars)
-                content_part = {"type": "text", "text": parsed_text}
             else:
-                parsed_text = f"[二进制文件未解析: {file_name}]"
-                content_part = {"type": "text", "text": parsed_text}
+                kind = "binary"
+                content_part = {
+                    "type": "file",
+                    "file_name": file_name,
+                    "mime_type": mime_type,
+                    "data": base64.b64encode(raw).decode("ascii"),
+                }
 
             prepared_attachments.append(
                 {
@@ -1021,10 +1059,9 @@ def create_chat_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.post("/api/chat/retry/stream")
+    @require_login
     def retry_chat_stream() -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _get_current_username()
 
         content_type = request.content_type or ""
         conversation_id: int | None

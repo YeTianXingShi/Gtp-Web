@@ -1,360 +1,189 @@
 """
-认证蓝图模块
+认证蓝图模块（JWT 版）
 
-本模块处理用户认证相关的路由和功能，包括：
-- 用户登录和登出
-- 会话管理
-- 访问控制（普通用户/管理员）
+提供基于 JWT 双 Token 的鉴权 API：
+- POST /api/login   ：账密登录，返回 access_token 与 user，refresh 通过 HttpOnly Cookie 下发
+- POST /api/refresh ：用 refresh cookie 换新的 access_token（并轮转 refresh）
+- POST /api/logout  ：撤销当前 refresh，清除 cookie
+- GET  /api/me      ：返回当前登录用户信息
+
+magic-login 免密链接机制已废弃。
+HTML 页面路由已全部迁移到前端 SPA。
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
-from flask import Blueprint, Response, abort, jsonify, redirect, render_template, request, session, url_for
-from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+import jwt
+from flask import Blueprint, g, jsonify, request
 
-from gtpweb.ai_providers import build_model_groups, serialize_model_options
+from gtpweb.auth_jwt import (
+    ACCESS_TTL,
+    REFRESH_TTL,
+    clear_refresh_cookie,
+    cleanup_expired_revocations,
+    decode_token,
+    is_refresh_jti_revoked,
+    issue_tokens,
+    read_refresh_cookie,
+    require_login,
+    revoke_refresh_jti,
+    set_refresh_cookie,
+)
+from gtpweb.audit import log_audit
 from gtpweb.config import AppConfig
-from gtpweb.runtime_state import get_runtime_state
 from gtpweb.user_store import get_user_record, verify_user_credentials
 
 logger = logging.getLogger(__name__)
 
 
-def _get_current_user_record(users_file: Path) -> dict[str, Any] | None:
-    """
-    获取当前用户的完整记录
-
-    Args:
-        users_file: 用户配置文件路径
-
-    Returns:
-        用户记录字典，未登录或用户不存在则返回 None
-    """
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None
-
-    record = get_user_record(users_file, username)
-    if record is None:
-        logger.warning("会话用户不存在，已清理登录态: 用户名=%s", username)
-        session.clear()
-        return None
-    return record
-
-
-def _get_current_user(users_file: Path) -> str | None:
-    """
-    获取当前用户名
-
-    Args:
-        users_file: 用户配置文件路径
-
-    Returns:
-        当前用户名，未登录则返回 None
-    """
-    record = _get_current_user_record(users_file)
-    if record is None:
-        return None
-    return str(record["username"])
-
-
-def _build_magic_login_redirect(record: dict[str, Any]) -> str:
-    if record.get("is_admin"):
-        return "/admin"
-    return "/chat"
-
-
-MAGIC_LOGIN_COOKIE_NAME = "magic_login_token"
-
-
-
-def _set_magic_login_cookie(response: Response, token: str, max_age: int) -> None:
-    response.set_cookie(
-        MAGIC_LOGIN_COOKIE_NAME,
-        token,
-        max_age=max_age,
-        httponly=True,
-        secure=bool(request.is_secure),
-        samesite="Lax",
-        path="/",
-    )
-
-
-
-def _clear_magic_login_cookie(response: Response) -> None:
-    response.delete_cookie(MAGIC_LOGIN_COOKIE_NAME, path="/")
-
-
-
-def _load_magic_login_payload(
-    serializer: URLSafeTimedSerializer,
-    token: str,
-    *,
-    max_age: int,
-) -> dict[str, Any] | None:
-    if not token:
-        return None
-    try:
-        payload = serializer.loads(token, max_age=max_age)
-    except SignatureExpired:
-        return None
-    except BadSignature:
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
-
-
-
-def _try_magic_cookie_login(
-    users_file: Path,
-    serializer: URLSafeTimedSerializer,
-    *,
-    max_age: int,
-) -> dict[str, Any] | None:
-    if session.get("username"):
-        return _get_current_user_record(users_file)
-
-    payload = _load_magic_login_payload(
-        serializer,
-        str(request.cookies.get(MAGIC_LOGIN_COOKIE_NAME, "")).strip(),
-        max_age=max_age,
-    )
-    if payload is None:
-        return None
-
-    username = str(payload.get("username", "")).strip()
-    if not username:
-        return None
-
-    record = get_user_record(users_file, username)
-    if record is None:
-        return None
-
-    session.clear()
-    session.permanent = True
-    session["username"] = record["username"]
-    return record
-
-
-
 def create_auth_blueprint(config: AppConfig) -> Blueprint:
-    """
-    创建认证蓝图
-
-    Args:
-        config: 应用配置
-
-    Returns:
-        Flask 蓝图对象
-    """
+    """创建认证蓝图。"""
     bp = Blueprint("auth", __name__)
     users_file = config.users_file
-    magic_login_serializer = URLSafeTimedSerializer(config.magic_login_secret, salt="magic-login")
-    magic_login_max_age = max(60, int(config.magic_login_default_max_age))
+    db_file = config.db_file
 
-    @bp.after_app_request
-    def refresh_magic_login_cookie(response: Response) -> Response:
-        username = session.get("username")
-        if not isinstance(username, str) or not username:
-            return response
-        if not request.cookies.get(MAGIC_LOGIN_COOKIE_NAME):
-            return response
-        payload: dict[str, Any] = {"username": username}
-        refreshed_token = magic_login_serializer.dumps(payload)
-        _set_magic_login_cookie(response, refreshed_token, magic_login_max_age)
-        return response
+    def _is_secure_request() -> bool:
+        return bool(request.is_secure)
 
-    @bp.get("/")
-    def index() -> Any:
-        """
-        根路径处理
-
-        根据用户角色重定向到相应页面：
-        - 未登录 → 登录页
-        - 管理员 → 管理页面
-        - 普通用户 → 聊天页面
-
-        Returns:
-            重定向响应
-        """
-        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
-            users_file,
-            magic_login_serializer,
-            max_age=magic_login_max_age,
-        )
-        if record is None:
-            return redirect(url_for("auth.login_page"))
-        if record["is_admin"]:
-            return redirect(url_for("admin.admin_page"))
-        return redirect(url_for("auth.chat_page"))
-
-    @bp.get("/login")
-    def login_page() -> str:
-        """
-        登录页面
-
-        如果已登录则重定向到相应页面。
-
-        Returns:
-            登录页面 HTML 或重定向响应
-        """
-        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
-            users_file,
-            magic_login_serializer,
-            max_age=magic_login_max_age,
-        )
-        if record is not None:
-            if record["is_admin"]:
-                return redirect(url_for("admin.admin_page"))
-            return redirect(url_for("auth.chat_page"))
-        return render_template("login.html")
-
-    @bp.get("/login/magic")
-    def magic_login() -> Any:
-        token = str(request.args.get("token", "")).strip()
-        next_url = str(request.args.get("next", "")).strip()
-        if not token:
-            abort(400, description="缺少 token")
-
-        payload = _load_magic_login_payload(
-            magic_login_serializer,
-            token,
-            max_age=magic_login_max_age,
-        )
-        if payload is None:
-            logger.warning("免登录失败: token 无效或已过期")
-            abort(401, description="免登录链接无效或已过期")
-
-        username = str(payload.get("username", "")).strip()
-        if not username:
-            abort(401, description="免登录链接无效")
-
-        record = get_user_record(users_file, username)
-        if record is None:
-            logger.warning("免登录失败: 用户不存在 用户名=%s", username)
-            abort(404, description="用户不存在")
-
-        session.clear()
-        session.permanent = True
-        session["username"] = record["username"]
-        redirect_to = next_url or str(payload.get("next", "")).strip() or _build_magic_login_redirect(record)
-        if not redirect_to.startswith("/"):
-            redirect_to = _build_magic_login_redirect(record)
-        refreshed_token = magic_login_serializer.dumps({"username": record["username"]})
-        response = redirect(redirect_to)
-        _set_magic_login_cookie(response, refreshed_token, magic_login_max_age)
-        logger.info("免登录成功: 用户名=%s 管理员=%s", username, record["is_admin"])
-        return response
+    def _serialize_user(record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "username": str(record["username"]),
+            "is_admin": bool(record.get("is_admin")),
+        }
 
     @bp.post("/api/login")
     def login() -> Any:
-        """
-        登录 API
-
-        验证用户凭据并创建会话。
-
-        Returns:
-            JSON 响应，包含登录结果和重定向目标
-        """
+        """账密登录，签发 access + refresh。"""
         payload = request.get_json(silent=True) or {}
         username = str(payload.get("username", "")).strip()
         password = str(payload.get("password", ""))
         logger.info("登录尝试: 用户名=%s", username or "<empty>")
 
-        # 参数验证
         if not username or not password:
             logger.warning("登录失败: 参数缺失 用户名=%s", username or "<empty>")
             return jsonify({"ok": False, "error": "账号和密码不能为空"}), 400
 
-        # 验证凭据
         user_record = verify_user_credentials(users_file, username, password)
         if user_record is None:
             logger.warning("登录失败: 账号或密码错误 用户名=%s", username)
             return jsonify({"ok": False, "error": "账号或密码错误"}), 401
 
-        # 创建会话
-        session.permanent = True
-        session["username"] = user_record["username"]
-        logger.info("登录成功: 用户名=%s 管理员=%s", username, user_record["is_admin"])
+        if user_record.get("enabled") is False:
+            logger.warning("登录失败: 账号已禁用 用户名=%s", username)
+            return jsonify({"ok": False, "error": "账号已被禁用"}), 403
 
-        return jsonify(
+        access, refresh, _refresh_jti, _refresh_exp = issue_tokens(
+            username=str(user_record["username"]),
+            is_admin=bool(user_record.get("is_admin")),
+        )
+
+        # 借登录的机会顺手清一下过期撤销记录，避免无限增长
+        cleanup_expired_revocations(db_file)
+
+        response = jsonify(
             {
                 "ok": True,
-                "is_admin": bool(user_record["is_admin"]),
-                "redirect_to": _build_magic_login_redirect(user_record),
+                "access_token": access,
+                "expires_in": int(ACCESS_TTL.total_seconds()),
+                "user": _serialize_user(user_record),
             }
         )
+        set_refresh_cookie(response, refresh, secure=_is_secure_request())
+        logger.info("登录成功: 用户名=%s 管理员=%s", username, bool(user_record.get("is_admin")))
+        log_audit(
+            config.db_file,
+            username=username,
+            action="login",
+            target_type="user",
+            target_id=username,
+            ip_address=request.remote_addr or "",
+        )
+        return response
+
+    @bp.post("/api/refresh")
+    def refresh() -> Any:
+        """用 refresh cookie 换新 access；同时轮转 refresh（旧的加入撤销列表）。"""
+        token = read_refresh_cookie()
+        if not token:
+            return jsonify({"ok": False, "error": "缺少刷新凭证"}), 401
+
+        try:
+            payload = decode_token(token, expected_type="refresh")
+        except jwt.ExpiredSignatureError:
+            return jsonify({"ok": False, "error": "刷新凭证已过期"}), 401
+        except jwt.PyJWTError:
+            return jsonify({"ok": False, "error": "刷新凭证无效"}), 401
+
+        old_jti = str(payload.get("jti", "")).strip()
+        if not old_jti or is_refresh_jti_revoked(db_file, old_jti):
+            logger.warning("拒绝已撤销的 refresh: jti=%s", old_jti)
+            return jsonify({"ok": False, "error": "刷新凭证已失效"}), 401
+
+        username = str(payload.get("sub", "")).strip()
+        if not username:
+            return jsonify({"ok": False, "error": "刷新凭证无效"}), 401
+
+        user_record = get_user_record(users_file, username)
+        if user_record is None or user_record.get("enabled") is False:
+            return jsonify({"ok": False, "error": "账号不存在或已禁用"}), 401
+
+        # 轮转 refresh：旧 jti 撤销，签发新 access + 新 refresh
+        old_exp = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc)
+        revoke_refresh_jti(db_file, old_jti, old_exp)
+
+        access, new_refresh, _new_jti, _new_exp = issue_tokens(
+            username=username,
+            is_admin=bool(user_record.get("is_admin")),
+        )
+
+        response = jsonify(
+            {
+                "ok": True,
+                "access_token": access,
+                "expires_in": int(ACCESS_TTL.total_seconds()),
+                "user": _serialize_user(user_record),
+            }
+        )
+        set_refresh_cookie(response, new_refresh, secure=_is_secure_request())
+        return response
 
     @bp.post("/api/logout")
     def logout() -> Any:
-        """
-        登出 API
+        """登出：撤销当前 refresh + 清空 cookie。允许匿名调用以兜底清理。"""
+        token = read_refresh_cookie()
+        if token:
+            try:
+                payload = jwt.decode(
+                    token,
+                    config.jwt_secret,
+                    algorithms=["HS256"],
+                    options={"verify_exp": False},
+                )
+                jti = str(payload.get("jti", "")).strip()
+                if jti and payload.get("type") == "refresh":
+                    exp_ts = int(payload.get("exp", 0))
+                    exp_dt = datetime.fromtimestamp(exp_ts, tz=timezone.utc) if exp_ts else datetime.now(timezone.utc) + REFRESH_TTL
+                    revoke_refresh_jti(db_file, jti, exp_dt)
+                    logger.info("退出登录: 用户名=%s jti=%s", payload.get("sub", "<unknown>"), jti)
+            except jwt.PyJWTError:
+                logger.info("退出登录: refresh cookie 已无效，仅清理 cookie")
 
-        清除当前会话。
-
-        Returns:
-            JSON 响应
-        """
-        username = _get_current_user(users_file) or "<anonymous>"
-        logger.info("退出登录: 用户名=%s", username)
-        session.clear()
         response = jsonify({"ok": True})
-        _clear_magic_login_cookie(response)
+        clear_refresh_cookie(response)
         return response
 
-    @bp.get("/chat")
-    def chat_page() -> Any:
-        """
-        聊天页面
-
-        需要用户登录才能访问。
-        渲染聊天页面并传递模型配置。
-
-        Returns:
-            聊天页面 HTML 或重定向响应
-        """
-        record = _get_current_user_record(users_file) or _try_magic_cookie_login(
-            users_file,
-            magic_login_serializer,
-            max_age=magic_login_max_age,
-        )
+    @bp.get("/api/me")
+    @require_login
+    def me() -> Any:
+        """返回当前登录用户的轻量信息（不含 api_keys 等敏感字段）。"""
+        username = g.user["username"]
+        record = get_user_record(users_file, username)
         if record is None:
-            return redirect(url_for("auth.login_page"))
-
-        # 获取运行时配置
-        runtime_settings = get_runtime_state().settings
-
-        return render_template(
-            "chat.html",
-            username=record["username"],
-            is_admin=bool(record["is_admin"]),
-            models=runtime_settings.models,
-            model_groups=build_model_groups(runtime_settings.model_options),
-            model_options=serialize_model_options(runtime_settings.model_options),
-            max_attachments_per_message=runtime_settings.max_attachments_per_message,
-            max_upload_mb=runtime_settings.max_upload_mb,
-            allowed_attachment_exts=sorted(runtime_settings.allowed_attachment_exts),
-        )
-
-    @bp.get("/tutorial")
-    def tutorial_page() -> Any:
-        user_record = _get_current_user_record(users_file)
-        if user_record is None:
-            return redirect(url_for("auth.login_page"))
-        try:
-            import markdown
-        except ImportError:
-            return render_template("tutorial.html", content="<p>请安装 markdown 依赖：pip install markdown</p>")
-        tutorial_file = config.db_file.parent / "tutorial.md"
-        if not tutorial_file.exists():
-            return render_template("tutorial.html", content="<p>教程内容暂未配置。</p>")
-        md_text = tutorial_file.read_text(encoding="utf-8")
-        html_content = markdown.markdown(md_text, extensions=["tables", "fenced_code"])
-        return render_template("tutorial.html", content=html_content)
+            return jsonify({"ok": False, "error": "用户不存在"}), 401
+        return jsonify({"ok": True, "user": _serialize_user(record)})
 
     return bp

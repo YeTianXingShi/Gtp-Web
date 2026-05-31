@@ -9,3 +9,8 @@ data/uploads/
 data/app.pid
 logs/
 config/deploy.env
+# 前端依赖与构建产物（构建可在部署时按需重建）
+frontend/node_modules/
+frontend/dist/
+static/dist/
+data/logo.png

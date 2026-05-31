@@ -11,16 +11,6 @@
   "openai": {
     "models": [
       {
-        "name": "gpt-5.2",
-        "label": "GPT-5.2（标准版）",
-        "reasoning": {
-          "enabled": true,
-          "effort": "high",
-          "effort_options": ["minimal", "low", "medium", "high", "xhigh"],
-          "summary": "auto"
-        }
-      },
-      {
         "name": "gpt-5.4",
         "label": "GPT-5.4（增强版）",
         "reasoning": {
@@ -43,38 +33,7 @@
     ]
   },
   "google": {
-    "models": [
-      {
-        "name": "gemini-3-flash-preview",
-        "label": "Gemini 3 Flash 预览版（轻量极速响应）",
-        "thinking": {
-          "enabled": true,
-          "include_thoughts": true,
-          "level": "medium",
-          "level_options": ["minimal", "low", "medium", "high"]
-        }
-      },
-      {
-        "name": "gemini-3-pro-preview",
-        "label": "Gemini 3 Pro 预览版（强大通用能力）",
-        "thinking": {
-          "enabled": true,
-          "include_thoughts": false,
-          "level": "high",
-          "level_options": ["low", "high"]
-        }
-      },
-      {
-        "name": "gemini-3.1-pro-preview",
-        "label": "Gemini 3.1 Pro 预览版（复杂任务与长文处理）",
-        "thinking": {
-          "enabled": true,
-          "include_thoughts": true,
-          "level": "high",
-          "level_options": ["low", "high"]
-        }
-      }
-    ]
+    "models": []
   },
   "claude": {
     // Claude 4.6 generation 起模型 ID 采用无日期后缀格式（pinned snapshot）。

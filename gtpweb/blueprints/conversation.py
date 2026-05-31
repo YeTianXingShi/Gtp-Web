@@ -18,31 +18,26 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from flask import Blueprint, Response, jsonify, request, send_file, session
+from flask import Blueprint, Response, g, jsonify, request, send_file
 
+from gtpweb.audit import log_audit
 from gtpweb.ai_providers import (
     normalize_model_selection,
     resolve_conversation_model_settings,
     resolve_model_option,
 )
+from gtpweb.auth_jwt import require_login
 from gtpweb.config import AppConfig
 from gtpweb.conversation_titles import allocate_default_conversation_title
 from gtpweb.db import open_db_connection
 from gtpweb.runtime_state import get_runtime_state
-from gtpweb.user_store import get_user_record
 from gtpweb.utils import safe_filename
 
 logger = logging.getLogger(__name__)
 
 
-def _get_current_user(users_file: Path) -> str | None:
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None
-    record = get_user_record(users_file, username)
-    if record is None:
-        return None
-    return str(record["username"])
+def _current_username() -> str:
+    return str(g.user["username"])
 
 
 def _get_row_choice_value(row: Any, key: str) -> str:
@@ -210,13 +205,11 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("conversation", __name__)
 
     db_file = config.db_file
-    users_file = config.users_file
 
     @bp.get("/api/conversations")
+    @require_login
     def list_conversations() -> Any:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
         query = str(request.args.get("q", "")).strip()
         runtime_settings = get_runtime_state().settings
         logger.info("会话列表查询: 用户=%s 关键词长度=%s", username, len(query))
@@ -272,10 +265,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True, "conversations": conversations})
 
     @bp.delete("/api/conversations/<int:conversation_id>")
+    @require_login
     def delete_conversation(conversation_id: int) -> Any:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
         logger.info("删除会话请求: 用户=%s 会话ID=%s", username, conversation_id)
 
         with open_db_connection(db_file) as conn:
@@ -294,14 +286,21 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
             conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
             conn.commit()
         logger.info("删除会话完成: 用户=%s 会话ID=%s", username, conversation_id)
+        log_audit(
+            db_file,
+            username=username,
+            action="delete_conversation",
+            target_type="conversation",
+            target_id=str(conversation_id),
+            ip_address=request.remote_addr or "",
+        )
 
         return jsonify({"ok": True})
 
     @bp.patch("/api/conversations/<int:conversation_id>")
+    @require_login
     def update_conversation(conversation_id: int) -> Any:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
 
         runtime_settings = get_runtime_state().settings
         payload = request.get_json(silent=True) or {}
@@ -420,10 +419,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.post("/api/conversations")
+    @require_login
     def create_conversation() -> Any:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
 
         runtime_settings = get_runtime_state().settings
 
@@ -481,6 +479,15 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
                 (conversation_id,),
             ).fetchone()
         logger.info("创建会话完成: 用户=%s 会话ID=%s 标题=%s", username, row["id"], row["title"])
+        log_audit(
+            db_file,
+            username=username,
+            action="create_conversation",
+            target_type="conversation",
+            target_id=str(row["id"]),
+            detail=f"model={requested_model}",
+            ip_address=request.remote_addr or "",
+        )
 
         return (
             jsonify(
@@ -497,10 +504,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.get("/api/conversations/<int:conversation_id>/messages")
+    @require_login
     def list_messages(conversation_id: int) -> Any:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
         logger.info("查询消息列表: 用户=%s 会话ID=%s", username, conversation_id)
 
         with open_db_connection(db_file) as conn:
@@ -615,10 +621,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.get("/api/attachments/<int:attachment_id>/content")
+    @require_login
     def get_attachment_content(attachment_id: int) -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
         logger.info("读取附件内容请求: 用户=%s 附件ID=%s", username, attachment_id)
 
         with open_db_connection(db_file) as conn:
@@ -662,10 +667,9 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         return response
 
     @bp.get("/api/conversations/<int:conversation_id>/export")
+    @require_login
     def export_conversation(conversation_id: int) -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
 
         export_format = str(request.args.get("format", "json")).strip().lower()
         logger.info(
@@ -813,12 +817,27 @@ def create_conversation_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.get("/api/me/usage")
+    @require_login
     def my_usage() -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
+        username = _current_username()
         from gtpweb.token_tracking import get_user_usage_summary
-        usage = get_user_usage_summary(db_file, username)
+        by_model = get_user_usage_summary(db_file, username)
+        total_input = sum(row.get("input_tokens", 0) or 0 for row in by_model)
+        total_output = sum(row.get("output_tokens", 0) or 0 for row in by_model)
+        usage = {
+            "total_input_tokens": total_input,
+            "total_output_tokens": total_output,
+            "total_tokens": total_input + total_output,
+            "by_model": [
+                {
+                    "model": row.get("model", ""),
+                    "input_tokens": row.get("input_tokens", 0) or 0,
+                    "output_tokens": row.get("output_tokens", 0) or 0,
+                    "total_tokens": (row.get("input_tokens", 0) or 0) + (row.get("output_tokens", 0) or 0),
+                }
+                for row in by_model
+            ],
+        }
         return jsonify({"ok": True, "usage": usage})
 
     return bp

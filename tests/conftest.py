@@ -258,15 +258,60 @@ def client(app):
     return app.test_client()
 
 
-@pytest.fixture()
-def logged_in_client(client):
-    resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert resp.status_code == 200
-    return client
+class _AuthedClient:
+    """对 Flask test_client 的轻量包装：自动注入 Authorization 头。
+
+    使用方式与 test_client 一致：authed.get("/api/...")，无需手动设置 header。
+    自身也提供 .access_token / .user 属性方便测试断言。
+    """
+
+    def __init__(self, client, access_token: str, user: dict):
+        self._client = client
+        self.access_token = access_token
+        self.user = user
+
+    def _inject(self, kwargs: dict) -> dict:
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("Authorization", f"Bearer {self.access_token}")
+        kwargs["headers"] = headers
+        return kwargs
+
+    def get(self, *args, **kwargs):
+        return self._client.get(*args, **self._inject(kwargs))
+
+    def post(self, *args, **kwargs):
+        return self._client.post(*args, **self._inject(kwargs))
+
+    def put(self, *args, **kwargs):
+        return self._client.put(*args, **self._inject(kwargs))
+
+    def patch(self, *args, **kwargs):
+        return self._client.patch(*args, **self._inject(kwargs))
+
+    def delete(self, *args, **kwargs):
+        return self._client.delete(*args, **self._inject(kwargs))
+
+    def open(self, *args, **kwargs):
+        return self._client.open(*args, **self._inject(kwargs))
+
+    def __getattr__(self, name):
+        # 回退到底层 client 的其他属性（如 cookie_jar、application 等）
+        return getattr(self._client, name)
+
+
+def _login_authed(client, *, username: str, password: str) -> _AuthedClient:
+    resp = client.post("/api/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["ok"] is True, data
+    return _AuthedClient(client, access_token=data["access_token"], user=data["user"])
 
 
 @pytest.fixture()
-def admin_client(client):
-    resp = client.post("/api/login", json={"username": "admin", "password": "admin-pass"})
-    assert resp.status_code == 200
-    return client
+def logged_in_client(client) -> _AuthedClient:
+    return _login_authed(client, username="u", password="p")
+
+
+@pytest.fixture()
+def admin_client(client) -> _AuthedClient:
+    return _login_authed(client, username="admin", password="admin-pass")

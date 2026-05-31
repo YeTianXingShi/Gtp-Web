@@ -639,26 +639,38 @@ def _build_google_part_from_item(item: dict[str, Any]) -> dict[str, Any] | None:
         return {"text": text} if text else None
 
     # 只处理图片类型
-    if part_type != "image_url":
-        return None
+    if part_type == "image_url":
+        image_url = item.get("image_url")
+        if not isinstance(image_url, dict):
+            return None
 
-    image_url = item.get("image_url")
-    if not isinstance(image_url, dict):
-        return None
+        url = str(image_url.get("url", "")).strip()
 
-    url = str(image_url.get("url", "")).strip()
+        # 解析 Data URL
+        match = _DATA_URL_RE.match(url)
+        if match is None:
+            return {"text": f"[暂不支持的图片地址: {url}]"} if url else None
 
-    # 解析 Data URL
-    match = _DATA_URL_RE.match(url)
-    if match is None:
-        return {"text": f"[暂不支持的图片地址: {url}]"} if url else None
-
-    return {
-        "inline_data": {
-            "mime_type": match.group("mime").strip(),
-            "data": match.group("data").strip(),
+        return {
+            "inline_data": {
+                "mime_type": match.group("mime").strip(),
+                "data": match.group("data").strip(),
+            }
         }
-    }
+
+    if part_type == "file":
+        file_data = str(item.get("data", ""))
+        file_mime = str(item.get("mime_type", "application/octet-stream"))
+        if file_data:
+            return {
+                "inline_data": {
+                    "mime_type": file_mime,
+                    "data": file_data,
+                }
+            }
+        return None
+
+    return None
 
 
 def _build_google_parts(content: Any) -> list[dict[str, Any]]:
@@ -901,6 +913,22 @@ def build_claude_messages(
                                 "data": match.group("data").strip(),
                             },
                         })
+                elif part_type == "file":
+                    file_data = str(item.get("data", ""))
+                    file_mime = str(item.get("mime_type", "application/octet-stream"))
+                    file_name = str(item.get("file_name", ""))
+                    if file_data:
+                        doc_block: dict[str, Any] = {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": file_mime,
+                                "data": file_data,
+                            },
+                        }
+                        if file_name:
+                            doc_block["title"] = file_name
+                        claude_content.append(doc_block)
             if claude_content:
                 claude_msgs.append({"role": claude_role, "content": claude_content})
         else:

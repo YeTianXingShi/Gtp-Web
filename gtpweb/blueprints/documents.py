@@ -11,49 +11,29 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from flask import Blueprint, Response, jsonify, request, send_file, session
+from flask import Blueprint, Response, g, jsonify, request, send_file
 
+from gtpweb.auth_jwt import require_admin, require_login
 from gtpweb.config import AppConfig
 from gtpweb.db import open_db_connection
-from gtpweb.user_store import get_user_record
 
 logger = logging.getLogger(__name__)
 
 
-def _get_current_user(users_file: Path) -> str | None:
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None
-    record = get_user_record(users_file, username)
-    if record is None:
-        return None
-    return str(record["username"])
-
-
-def _require_admin(users_file: Path) -> tuple[dict[str, Any] | None, Response | None]:
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None, (jsonify({"ok": False, "error": "请先登录"}), 401)
-    record = get_user_record(users_file, username)
-    if record is None or not record.get("is_admin"):
-        return None, (jsonify({"ok": False, "error": "需要管理员权限"}), 403)
-    return record, None
+def _current_username() -> str:
+    return str(g.user["username"])
 
 
 def create_documents_blueprint(config: AppConfig) -> Blueprint:
     bp = Blueprint("documents", __name__)
 
     db_file = config.db_file
-    users_file = config.users_file
     upload_dir = config.upload_dir
     documents_dir = upload_dir.parent / "documents"
 
     @bp.get("/api/documents")
+    @require_login
     def list_documents() -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
-
         category = request.args.get("category", "").strip()
         query = "SELECT id, title, category, file_name, file_size, mime_type, uploaded_by, created_at, updated_at FROM documents"
         params: list[Any] = []
@@ -82,11 +62,8 @@ def create_documents_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True, "documents": documents})
 
     @bp.get("/api/documents/<int:doc_id>/download")
+    @require_login
     def download_document(doc_id: int) -> Response:
-        username = _get_current_user(users_file)
-        if not username:
-            return jsonify({"ok": False, "error": "请先登录"}), 401
-
         with open_db_connection(db_file) as conn:
             row = conn.execute(
                 "SELECT file_path, file_name, mime_type FROM documents WHERE id = ?",
@@ -108,10 +85,9 @@ def create_documents_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.post("/api/admin/documents")
+    @require_admin
     def upload_document() -> Response:
-        admin, err = _require_admin(users_file)
-        if err:
-            return err
+        admin_username = _current_username()
 
         file = request.files.get("file")
         if not file or not file.filename:
@@ -139,20 +115,17 @@ def create_documents_blueprint(config: AppConfig) -> Blueprint:
                 INSERT INTO documents (title, category, file_path, file_name, file_size, mime_type, uploaded_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (title, category, str(saved_path), file_name, file_size, mime_type, admin["username"]),
+                (title, category, str(saved_path), file_name, file_size, mime_type, admin_username),
             )
             doc_id = cursor.lastrowid
             conn.commit()
 
-        logger.info("文档上传完成: ID=%s 标题=%s 分类=%s 上传者=%s", doc_id, title, category, admin["username"])
+        logger.info("文档上传完成: ID=%s 标题=%s 分类=%s 上传者=%s", doc_id, title, category, admin_username)
         return jsonify({"ok": True, "document": {"id": doc_id, "title": title, "category": category}}), 201
 
     @bp.put("/api/admin/documents/<int:doc_id>")
+    @require_admin
     def update_document(doc_id: int) -> Response:
-        admin, err = _require_admin(users_file)
-        if err:
-            return err
-
         payload = request.get_json(silent=True) or {}
         title = str(payload.get("title", "")).strip()
         category = str(payload.get("category", "")).strip()
@@ -185,10 +158,9 @@ def create_documents_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True})
 
     @bp.delete("/api/admin/documents/<int:doc_id>")
+    @require_admin
     def delete_document(doc_id: int) -> Response:
-        admin, err = _require_admin(users_file)
-        if err:
-            return err
+        admin_username = _current_username()
 
         with open_db_connection(db_file) as conn:
             row = conn.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
@@ -202,7 +174,7 @@ def create_documents_blueprint(config: AppConfig) -> Blueprint:
             conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
             conn.commit()
 
-        logger.info("文档删除完成: ID=%s 操作者=%s", doc_id, admin["username"])
+        logger.info("文档删除完成: ID=%s 操作者=%s", doc_id, admin_username)
         return jsonify({"ok": True})
 
     return bp

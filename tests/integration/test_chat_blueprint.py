@@ -4,11 +4,22 @@ import io
 
 from docx import Document
 
+from tests.conftest import _AuthedClient
+
 PNG_1X1_BYTES = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
     b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?"
     b"\x00\x05\xfe\x02\xfeA\x0f\x95~\x00\x00\x00\x00IEND\xaeB`\x82"
 )
+
+
+def _authed(app, username: str = "u", password: str = "p") -> _AuthedClient:
+    """app_builder 创建的应用做账密登录后返回带 Authorization 的客户端。"""
+    raw_client = app.test_client()
+    resp = raw_client.post("/api/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    data = resp.get_json()
+    return _AuthedClient(raw_client, access_token=data["access_token"], user=data["user"])
 
 
 
@@ -18,7 +29,7 @@ class _OpenAITextStream:
 
     def __iter__(self):
         for chunk in self._chunks:
-            yield {"choices": [{"delta": {"content": chunk}}]}
+            yield {"type": "response.output_text.delta", "delta": chunk}
 
 
 class _OpenAITextStreamWithError:
@@ -28,7 +39,7 @@ class _OpenAITextStreamWithError:
 
     def __iter__(self):
         for chunk in self._chunks:
-            yield {"choices": [{"delta": {"content": chunk}}]}
+            yield {"type": "response.output_text.delta", "delta": chunk}
         raise RuntimeError(self._error_message)
 
 
@@ -43,7 +54,7 @@ def _install_openai_streams(app, streams: list[object]) -> None:
             raise AssertionError("未配置足够的 OpenAI 流返回")
         return queue.pop(0)
 
-    runtime_state.openai_client.chat.completions.create = _create
+    runtime_state.openai_client.responses.create = _create
 
 
 def _create_conversation(client) -> int:
@@ -76,7 +87,7 @@ def test_chat_stream_with_text_attachment(logged_in_client, app):
 
 
 
-def test_chat_stream_rejects_non_whitelist_extension(logged_in_client):
+def test_chat_stream_accepts_any_file_extension(logged_in_client):
     conv_id = _create_conversation(logged_in_client)
 
     resp = logged_in_client.post(
@@ -84,15 +95,12 @@ def test_chat_stream_rejects_non_whitelist_extension(logged_in_client):
         data={
             "conversation_id": str(conv_id),
             "model": "openai:gpt-4o-mini",
-            "content": "bad file",
-            "files": [(io.BytesIO(b"%PDF-1.4"), "forbidden.pdf")],
+            "content": "analyze this",
+            "files": [(io.BytesIO(b"%PDF-1.4"), "document.pdf")],
         },
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 400
-    data = resp.get_json()
-    assert data["ok"] is False
-    assert "不支持的文件类型" in data["error"]
+    assert resp.status_code == 200
 
 
 
@@ -203,10 +211,7 @@ def test_google_chat_stream_uses_google_client_and_base_url(app_builder):
             "GOOGLE_API_KEY=google-test-key\n"
         ),
     )
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     create_resp = client.post(
         "/api/conversations",
@@ -258,10 +263,7 @@ def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
             {"type": "response.output_text.delta", "delta": "这是最终回复。"},
         ],
     )
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     create_resp = client.post(
         "/api/conversations",
@@ -295,7 +297,7 @@ def test_openai_reasoning_summary_is_persisted_in_messages(app_builder):
     assert seen_requests[0]["reasoning"] == {"effort": "high", "summary": "auto"}
 
 
-def test_openai_reasoning_enabled_false_falls_back_to_chat_completions(app_builder):
+def test_openai_reasoning_disabled_still_uses_responses_api(app_builder):
     app = app_builder(
         models_config_text=(
             '{\n'
@@ -307,10 +309,7 @@ def test_openai_reasoning_enabled_false_falls_back_to_chat_completions(app_build
             '}\n'
         ),
     )
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     create_resp = client.post(
         "/api/conversations",
@@ -334,8 +333,7 @@ def test_openai_reasoning_enabled_false_falls_back_to_chat_completions(app_build
     seen_requests = app.extensions["seen_openai_requests"]
     assert seen_requests
     assert seen_requests[0].get("reasoning") is None
-    assert "messages" in seen_requests[0]
-    assert "input" not in seen_requests[0]
+    assert "input" in seen_requests[0]
 
 
 def test_google_model_specific_thinking_config_is_applied(app_builder):
@@ -357,10 +355,7 @@ def test_google_model_specific_thinking_config_is_applied(app_builder):
             "GOOGLE_API_KEY=google-test-key\n"
         ),
     )
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     create_resp = client.post(
         "/api/conversations",
@@ -409,10 +404,7 @@ def test_google_thinking_can_hide_thoughts_without_disabling_thinking(app_builde
             "GOOGLE_API_KEY=google-test-key\n"
         ),
     )
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     create_resp = client.post(
         "/api/conversations",
@@ -446,10 +438,7 @@ def test_google_thinking_can_hide_thoughts_without_disabling_thinking(app_builde
 
 def test_retry_chat_stream_reuses_last_user_message_after_empty_failure(app_builder):
     app = app_builder()
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     conv_id = _create_conversation(client)
     _install_openai_streams(
@@ -472,7 +461,9 @@ def test_retry_chat_stream_reuses_last_user_message_after_empty_failure(app_buil
     assert first_resp.status_code == 200
     first_body = first_resp.get_data(as_text=True)
     assert '"type": "error"' in first_body
-    assert "上游临时不可用" in first_body
+    # 上游 raw 错误（"上游临时不可用"）必须被脱敏，前端只看到友好提示
+    assert "上游临时不可用" not in first_body
+    assert "OpenAI" in first_body
 
     messages_resp = client.get(f"/api/conversations/{conv_id}/messages")
     assert messages_resp.status_code == 200
@@ -502,10 +493,7 @@ def test_retry_chat_stream_reuses_last_user_message_after_empty_failure(app_buil
 
 def test_retry_chat_stream_replaces_incomplete_assistant_message(app_builder):
     app = app_builder()
-    client = app.test_client()
-
-    login_resp = client.post("/api/login", json={"username": "u", "password": "p"})
-    assert login_resp.status_code == 200
+    client = _authed(app)
 
     conv_id = _create_conversation(client)
     _install_openai_streams(

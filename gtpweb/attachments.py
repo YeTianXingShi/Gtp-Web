@@ -316,22 +316,16 @@ def build_message_content_for_model(
                 parts.append({"type": "text", "text": f"[图片附件缺失: {file_name}]"})
             continue
 
-        parsed_text = str(attachment["parsed_text"] or "").strip()
-        if parsed_text:
-            parts.append({"type": "text", "text": parsed_text})
-            continue
-
-        if file_path.exists() and is_text_attachment(file_name, mime_type):
+        if file_path.exists():
             raw = file_path.read_bytes()
-            text = decode_text_bytes(raw)
-            parts.append(
-                {
-                    "type": "text",
-                    "text": build_file_text_block(file_name, text, max_text_file_chars),
-                }
-            )
+            parts.append({
+                "type": "file",
+                "file_name": file_name,
+                "mime_type": mime_type,
+                "data": base64.b64encode(raw).decode("ascii"),
+            })
         else:
-            parts.append({"type": "text", "text": f"[二进制文件未解析: {file_name}]"})
+            parts.append({"type": "text", "text": f"[附件缺失: {file_name}]"})
 
     if not parts:
         return ""

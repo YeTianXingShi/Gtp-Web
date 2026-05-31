@@ -13,10 +13,11 @@ Flask 应用工厂模块
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+import os
 from typing import Any
 
 from flask import Flask
+from flask_cors import CORS
 from openai import OpenAI
 
 from .blueprints import register_blueprints
@@ -132,9 +133,23 @@ def create_app() -> Flask:
         static_url_path="/static",
     )
 
-    # 配置应用密钥和会话
+    # 配置应用密钥（保留为 Flask itsdangerous 默认签名等用途）
     app.secret_key = config.secret_key
-    app.permanent_session_lifetime = timedelta(hours=12)
+    app.config["JWT_SECRET"] = config.jwt_secret
+
+    # 开发期允许 Vite dev server 跨域；生产同源部署时 ALLOWED_ORIGINS 留空即不放行
+    dev_origin = os.getenv("FRONTEND_DEV_ORIGIN", "http://localhost:5173").strip()
+    debug_mode = os.getenv("FLASK_DEBUG", "0").strip() in {"1", "true", "True"}
+    allowed_origins = [dev_origin] if debug_mode and dev_origin else []
+    if allowed_origins:
+        CORS(
+            app,
+            resources={r"/api/*": {"origins": allowed_origins}},
+            supports_credentials=True,
+            expose_headers=["X-Accel-Buffering"],
+            max_age=600,
+        )
+        logger.info("CORS 已启用: 允许来源=%s", allowed_origins)
 
     # 保存配置路径到应用配置
     app.config["ENV_DIR"] = str(config.env_dir)

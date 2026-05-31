@@ -189,6 +189,17 @@ def init_db(db_file: Path) -> None:
             """
         )
 
+        # 创建 refresh token 撤销列表
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS revoked_refresh_jti (
+                jti TEXT PRIMARY KEY,
+                revoked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                exp_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
         # 获取当前表结构，用于数据库迁移
         message_columns = {
             str(row["name"])

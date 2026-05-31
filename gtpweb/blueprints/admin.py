@@ -20,16 +20,16 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
-from flask import Blueprint, current_app, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, g, jsonify, request
 
 from gtpweb.audit import log_audit, query_audit_logs
+from gtpweb.auth_jwt import require_admin
 from gtpweb.config import AppConfig, ENV_GROUP_SPECS, parse_model_catalog_text
 from gtpweb.runtime_state import apply_runtime_config_values, read_env_files_values
 from gtpweb.token_tracking import get_all_users_usage, get_user_usage_summary
 from gtpweb.user_store import (
     create_user,
     delete_user,
-    get_user_record,
     list_users,
     load_users_config,
     normalize_users_config,
@@ -45,35 +45,8 @@ CONFIG_FILE_AUTH_USERS = "auth_users"
 CONFIG_FILE_MODELS = "models"
 
 
-def _get_current_user_record(users_file: Path) -> dict[str, Any] | None:
-    username = session.get("username")
-    if not isinstance(username, str) or not username:
-        return None
-
-    record = get_user_record(users_file, username)
-    if record is None:
-        logger.warning("后台访问用户不存在，已清理登录态: 用户名=%s", username)
-        session.clear()
-        return None
-    return record
-
-
-def _require_admin_page(users_file: Path) -> dict[str, Any] | None:
-    record = _get_current_user_record(users_file)
-    if record is None:
-        return None
-    if not record["is_admin"]:
-        return None
-    return record
-
-
-def _require_admin_api(users_file: Path) -> tuple[dict[str, Any] | None, tuple[Any, int] | None]:
-    record = _get_current_user_record(users_file)
-    if record is None:
-        return None, (jsonify({"ok": False, "error": "请先登录"}), 401)
-    if not record["is_admin"]:
-        return None, (jsonify({"ok": False, "error": "需要管理员权限"}), 403)
-    return record, None
+def _current_username() -> str:
+    return str(g.user["username"])
 
 
 def _normalize_text_file_content(raw_text: str) -> str:
@@ -194,24 +167,9 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
     users_file = config.users_file
     config_files = _build_config_file_items(config)
 
-    @bp.get("/admin")
-    def admin_page() -> Any:
-        record = _require_admin_page(users_file)
-        if record is None:
-            if _get_current_user_record(users_file) is None:
-                return redirect(url_for("auth.login_page"))
-            return redirect(url_for("auth.chat_page"))
-        return render_template(
-            "admin.html",
-            username=record["username"],
-            config_files=[_serialize_config_file_item(item) for item in config_files.values()],
-        )
-
     @bp.get("/api/admin/config-files")
+    @require_admin
     def list_config_files() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
         return jsonify(
             {
                 "ok": True,
@@ -221,11 +179,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.get("/api/admin/config-files/<file_id>")
+    @require_admin
     def get_config_file(file_id: str) -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         try:
             item = _get_config_file_item(config_files, file_id)
             content = _read_config_file_content(item)
@@ -241,10 +196,9 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.put("/api/admin/config-files/<file_id>")
+    @require_admin
     def update_config_file(file_id: str) -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
+        current_username = _current_username()
 
         payload = request.get_json(silent=True) or {}
         raw_content = payload.get("content", "")
@@ -257,7 +211,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             content = _save_config_file_content(
                 item,
                 raw_content,
-                current_username=current_record["username"],
+                current_username=current_username,
             )
             if item["format"] in {"dotenv", "jsonc"}:
                 hot_reload = apply_runtime_config_values(
@@ -274,6 +228,14 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             item["path"],
             hot_reload,
         )
+        log_audit(
+            config.db_file,
+            username=current_username,
+            action="update_config",
+            target_type="config",
+            target_id=file_id,
+            ip_address=request.remote_addr or "",
+        )
         response_body: dict[str, Any] = {
             "ok": True,
             **_serialize_config_file_item(item),
@@ -284,11 +246,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         return jsonify(response_body)
 
     @bp.get("/api/admin/auth-config")
+    @require_admin
     def get_auth_config() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         item = config_files[CONFIG_FILE_AUTH_USERS]
         return jsonify(
             {
@@ -299,10 +258,9 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         )
 
     @bp.put("/api/admin/auth-config")
+    @require_admin
     def update_auth_config() -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
+        current_username = _current_username()
 
         payload = request.get_json(silent=True) or {}
         raw_content = payload.get("content", "")
@@ -314,7 +272,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             content = _save_config_file_content(
                 item,
                 raw_content,
-                current_username=current_record["username"],
+                current_username=current_username,
             )
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
@@ -330,11 +288,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
     # ── Dashboard ──────────────────────────────────────────────
 
     @bp.get("/api/admin/dashboard")
+    @require_admin
     def dashboard_stats() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         from gtpweb.db import open_db_connection
 
         db_file = config.db_file
@@ -361,18 +316,14 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
     # ── User Management ────────────────────────────────────────
 
     @bp.get("/api/admin/users")
+    @require_admin
     def list_admin_users() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         return jsonify({"ok": True, "users": list_users(users_file)})
 
     @bp.post("/api/admin/users")
+    @require_admin
     def create_admin_user() -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
+        current_username = _current_username()
 
         payload = request.get_json(silent=True) or {}
         username = payload.get("username", "")
@@ -386,7 +337,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
 
         log_audit(
             config.db_file,
-            username=current_record["username"],
+            username=current_username,
             action="create_user",
             target_type="user",
             target_id=username,
@@ -396,10 +347,9 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True, "user": result}), 201
 
     @bp.route("/api/admin/users/<username>", methods=["PATCH"])
+    @require_admin
     def update_admin_user(username: str) -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
+        current_username = _current_username()
 
         payload = request.get_json(silent=True) or {}
         password = payload.get("password")
@@ -417,7 +367,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
                     username,
                     password=password,
                     is_admin=is_admin,
-                    current_username=current_record["username"],
+                    current_username=current_username,
                 )
             except ValueError as exc:
                 return jsonify({"ok": False, "error": str(exc)}), 400
@@ -457,7 +407,7 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
 
         log_audit(
             config.db_file,
-            username=current_record["username"],
+            username=current_username,
             action="update_user",
             target_type="user",
             target_id=username,
@@ -467,19 +417,18 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
         return jsonify({"ok": True, "username": username, "changes": changes})
 
     @bp.delete("/api/admin/users/<username>")
+    @require_admin
     def delete_admin_user(username: str) -> Any:
-        current_record, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
+        current_username = _current_username()
 
         try:
-            delete_user(users_file, username, current_username=current_record["username"])
+            delete_user(users_file, username, current_username=current_username)
         except ValueError as exc:
             return jsonify({"ok": False, "error": str(exc)}), 400
 
         log_audit(
             config.db_file,
-            username=current_record["username"],
+            username=current_username,
             action="delete_user",
             target_type="user",
             target_id=username,
@@ -490,11 +439,8 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
     # ── Token Usage ────────────────────────────────────────────
 
     @bp.get("/api/admin/token-usage")
+    @require_admin
     def admin_token_usage() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         db_file = config.db_file
         range_param = request.args.get("range", "today")
         username_param = request.args.get("username")
@@ -508,20 +454,40 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             start_date = today.isoformat()
 
         if username_param:
-            data = get_user_usage_summary(db_file, username_param, start_date=start_date)
+            rows = get_user_usage_summary(db_file, username_param, start_date=start_date)
         else:
-            data = get_all_users_usage(db_file, start_date=start_date)
+            rows = get_all_users_usage(db_file, start_date=start_date)
 
-        return jsonify({"ok": True, "range": range_param, "usage": data})
+        grouped: dict[str, dict] = {}
+        for row in rows:
+            uname = row.get("username", username_param or "")
+            if uname not in grouped:
+                grouped[uname] = {
+                    "username": uname,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_tokens": 0,
+                    "by_model": [],
+                }
+            inp = row.get("input_tokens", 0) or 0
+            out = row.get("output_tokens", 0) or 0
+            grouped[uname]["total_input_tokens"] += inp
+            grouped[uname]["total_output_tokens"] += out
+            grouped[uname]["total_tokens"] += inp + out
+            grouped[uname]["by_model"].append({
+                "model": row.get("model", ""),
+                "input_tokens": inp,
+                "output_tokens": out,
+                "total_tokens": inp + out,
+            })
+
+        return jsonify({"ok": True, "range": range_param, "usage": list(grouped.values())})
 
     # ── Audit Logs ─────────────────────────────────────────────
 
     @bp.get("/api/admin/audit-logs")
+    @require_admin
     def admin_audit_logs() -> Any:
-        _, error_response = _require_admin_api(users_file)
-        if error_response is not None:
-            return error_response
-
         username_param = request.args.get("username")
         action_param = request.args.get("action")
         limit = min(int(request.args.get("limit", 100)), 500)
@@ -535,5 +501,63 @@ def create_admin_blueprint(config: AppConfig) -> Blueprint:
             offset=offset,
         )
         return jsonify({"ok": True, "logs": logs})
+
+    # ── Logo 管理 ─────────────────────────────────────────────
+
+    logo_dir = Path(config.db_file).parent
+    logo_path = logo_dir / "logo.png"
+
+    @bp.get("/api/admin/logo")
+    @require_admin
+    def get_logo_info() -> Any:
+        exists = logo_path.is_file()
+        return jsonify({
+            "ok": True,
+            "has_logo": exists,
+            "url": "/api/logo" if exists else None,
+        })
+
+    @bp.post("/api/admin/logo")
+    @require_admin
+    def upload_logo() -> Any:
+        current_username = _current_username()
+        file = request.files.get("file")
+        if file is None or not file.filename:
+            return jsonify({"ok": False, "error": "请选择文件"}), 400
+        mime = (file.mimetype or "").lower()
+        if not mime.startswith("image/"):
+            return jsonify({"ok": False, "error": "仅支持图片文件"}), 400
+        raw = file.read()
+        if not raw:
+            return jsonify({"ok": False, "error": "文件为空"}), 400
+        if len(raw) > 5 * 1024 * 1024:
+            return jsonify({"ok": False, "error": "Logo 文件不能超过 5MB"}), 400
+        logo_dir.mkdir(parents=True, exist_ok=True)
+        logo_path.write_bytes(raw)
+        logger.info("Logo 已更新: 操作者=%s 大小=%s", current_username, len(raw))
+        log_audit(
+            config.db_file,
+            username=current_username,
+            action="update_logo",
+            target_type="logo",
+            ip_address=request.remote_addr or "",
+        )
+        return jsonify({"ok": True, "has_logo": True, "url": "/api/logo"})
+
+    @bp.delete("/api/admin/logo")
+    @require_admin
+    def delete_logo() -> Any:
+        current_username = _current_username()
+        if logo_path.is_file():
+            logo_path.unlink()
+        logger.info("Logo 已删除: 操作者=%s", current_username)
+        log_audit(
+            config.db_file,
+            username=current_username,
+            action="delete_logo",
+            target_type="logo",
+            ip_address=request.remote_addr or "",
+        )
+        return jsonify({"ok": True, "has_logo": False})
 
     return bp

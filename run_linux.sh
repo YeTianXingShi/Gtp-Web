@@ -161,6 +161,41 @@ echo "[4/5] Installing Python dependencies..."
 python -m pip install --upgrade pip >/dev/null
 pip install -r "${PROJECT_DIR}/requirements.txt"
 
+echo "[4.5/5] Building frontend (if pnpm is available)..."
+FRONTEND_DIR="${PROJECT_DIR}/frontend"
+DIST_DIR="${PROJECT_DIR}/static/dist"
+# 说明：
+# - frontend/.npmrc 设置 verify-deps-before-run=never，避免 pnpm 在 `pnpm <script>`
+#   前自动跑 install，触发 ERR_PNPM_IGNORED_BUILDS 警告。
+# - pnpm 11 默认会拒绝执行依赖的 postinstall 构建脚本（如 esbuild）。
+#   `pnpm approve-builds --all` 非交互一次性批准并执行这些脚本，把它们从
+#   node_modules/.modules.yaml 的 ignoredBuilds 列表移除，之后警告不再出现。
+if [[ -d "${FRONTEND_DIR}" ]]; then
+  if has_cmd pnpm; then
+    (
+      cd "${FRONTEND_DIR}"
+      if [[ -f pnpm-lock.yaml ]]; then
+        pnpm install --frozen-lockfile || pnpm install
+      else
+        pnpm install
+      fi
+      pnpm approve-builds --all || true
+      pnpm build
+    )
+  elif has_cmd npm; then
+    echo "pnpm not found, falling back to npm..."
+    (cd "${FRONTEND_DIR}" && npm install --no-audit --no-fund)
+    (cd "${FRONTEND_DIR}" && npm run build)
+  else
+    if [[ ! -f "${DIST_DIR}/index.html" ]]; then
+      echo "Warning: neither pnpm nor npm found, and ${DIST_DIR}/index.html missing." >&2
+      echo "Frontend will be unavailable; install Node + pnpm and rerun, or commit static/dist/." >&2
+    else
+      echo "Skipping frontend build: no pnpm/npm. Reusing existing ${DIST_DIR}."
+    fi
+  fi
+fi
+
 echo "[5/5] Starting app in background..."
 mkdir -p "${PROJECT_DIR}/data" "${LOG_DIR}"
 

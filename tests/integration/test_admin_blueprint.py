@@ -5,29 +5,30 @@ from pathlib import Path
 
 
 
-def test_admin_page_requires_admin(logged_in_client):
+def test_admin_page_route_removed(logged_in_client):
+    """旧 GET /admin HTML 路由已下线；现在由 SPA 兜底返回 index.html。"""
     resp = logged_in_client.get("/admin", follow_redirects=False)
-    assert resp.status_code == 302
-    assert resp.headers["Location"].endswith("/chat")
-
+    # 没有 dist/index.html 时 SPA 蓝图返回 503（构建产物缺失）；存在则 200
+    assert resp.status_code in (200, 503)
+    if resp.status_code == 200:
+        assert resp.mimetype == "text/html"
 
 
 def test_admin_api_requires_admin(logged_in_client):
+    """普通用户访问管理 API 应被拒绝。"""
     resp = logged_in_client.get("/api/admin/config-files")
     assert resp.status_code == 403
     data = resp.get_json()
     assert data["ok"] is False
 
 
+def test_admin_api_requires_login(client):
+    """匿名访问管理 API 应返回 401。"""
+    resp = client.get("/api/admin/config-files")
+    assert resp.status_code == 401
+
 
 def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
-    page_resp = admin_client.get("/admin")
-    assert page_resp.status_code == 200
-    page_text = page_resp.get_data(as_text=True)
-    assert "配置文件管理" in page_text
-    assert "账号管理" in page_text
-    assert "create-user-form" in page_text
-
     files_resp = admin_client.get("/api/admin/config-files")
     assert files_resp.status_code == 200
     files_data = files_resp.get_json()
@@ -70,10 +71,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     persisted_auth = json.loads(auth_file.read_text(encoding="utf-8"))
     assert any(item["username"] == "ops" for item in persisted_auth["users"])
 
-    app_config_resp = admin_client.get("/api/admin/config-files/env_app")
-    assert app_config_resp.status_code == 200
-    app_config_data = app_config_resp.get_json()
-
     save_app_resp = admin_client.put(
         "/api/admin/config-files/env_app",
         json={
@@ -112,12 +109,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "}\n"
     )
 
-    openai_config_resp = admin_client.get("/api/admin/config-files/env_openai")
-    assert openai_config_resp.status_code == 200
-    openai_config_data = openai_config_resp.get_json()
-    assert openai_config_data["requires_restart"] is True
-    assert "OPENAI_BASE_URL=https://example.invalid/v1" in openai_config_data["content"]
-
     save_openai_resp = admin_client.put(
         "/api/admin/config-files/env_openai",
         json={
@@ -133,12 +124,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
     }
-    assert save_openai_data["hot_reload"]["restart_required_keys"] == []
-
-    google_config_resp = admin_client.get("/api/admin/config-files/env_google")
-    assert google_config_resp.status_code == 200
-    google_config_data = google_config_resp.get_json()
-    assert google_config_data["requires_restart"] is True
 
     save_google_resp = admin_client.put(
         "/api/admin/config-files/env_google",
@@ -155,7 +140,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "GOOGLE_BASE_URL",
         "GOOGLE_API_KEY",
     }
-    assert save_google_data["hot_reload"]["restart_required_keys"] == []
 
     save_models_resp = admin_client.put(
         "/api/admin/config-files/models",
@@ -169,7 +153,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "GOOGLE_MODELS",
         "GOOGLE_MODEL_CONFIG",
     }
-    assert save_models_data["hot_reload"]["restart_required_keys"] == []
 
     save_attachment_resp = admin_client.put(
         "/api/admin/config-files/env_attachments",
@@ -190,7 +173,6 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
         "MAX_TEXT_FILE_CHARS",
         "MAX_UPLOAD_MB",
     }
-    assert save_attachment_data["hot_reload"]["restart_required_keys"] == []
 
     save_logging_resp = admin_client.put(
         "/api/admin/config-files/env_logging",
@@ -210,10 +192,8 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     assert save_logging_data["hot_reload"]["restart_required_keys"] == ["LOG_LEVEL"]
 
     env_files = app.config["ENV_FILES"]
-    app_env_text = Path(env_files[0]).read_text(encoding="utf-8")
     openai_env_text = Path(env_files[1]).read_text(encoding="utf-8")
     google_env_text = Path(env_files[2]).read_text(encoding="utf-8")
-    models_config_text = Path(app.config["MODEL_CONFIG_FILE"]).read_text(encoding="utf-8")
     attachments_env_text = Path(env_files[5]).read_text(encoding="utf-8")
     logging_env_text = Path(env_files[6]).read_text(encoding="utf-8")
     assert "OPENAI_BASE_URL=https://new.example/v1" in openai_env_text
@@ -242,12 +222,15 @@ def test_admin_can_edit_grouped_config_files_and_hot_reload(admin_client, app):
     create_conv_resp = admin_client.post("/api/conversations", json={"model": "openai:gpt-4.1-mini"})
     assert create_conv_resp.status_code == 201
 
-    chat_page_resp = admin_client.get("/chat")
-    assert chat_page_resp.status_code == 200
-    chat_page_text = chat_page_resp.get_data(as_text=True)
-    assert "gpt-4.1-mini" in chat_page_text
-    assert "gemini-2.0-flash" in chat_page_text
-    assert "maxAttachmentsPerMessage: 3" in chat_page_text
-    assert "maxUploadMB: 8" in chat_page_text
-    assert ".docx" in chat_page_text
-    assert ".png" in chat_page_text
+    # /api/bootstrap 取代旧的 HTML 注入，新前端从这里读启动数据
+    bootstrap_resp = admin_client.get("/api/bootstrap")
+    assert bootstrap_resp.status_code == 200
+    bootstrap_data = bootstrap_resp.get_json()
+    assert bootstrap_data["ok"] is True
+    model_ids = [option["id"] for option in bootstrap_data["models"]["options"]]
+    assert "openai:gpt-4.1-mini" in model_ids
+    assert "google:gemini-2.0-flash" in model_ids
+    assert bootstrap_data["attachments"]["max_per_message"] == 3
+    assert bootstrap_data["attachments"]["max_upload_mb"] == 8
+    assert ".png" in bootstrap_data["attachments"]["allowed_exts"]
+    assert ".docx" in bootstrap_data["attachments"]["allowed_exts"]

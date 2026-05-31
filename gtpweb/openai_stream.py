@@ -81,20 +81,29 @@ def _build_response_input_content(content: Any) -> str | list[dict[str, Any]]:
             if isinstance(text, str) and text:
                 converted.append({"type": "input_text", "text": text})
             continue
-        if item_type != "image_url":
+        if item_type == "image_url":
+            image_url = item.get("image_url")
+            if not isinstance(image_url, dict):
+                continue
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url:
+                continue
+            image_item: dict[str, Any] = {"type": "input_image", "image_url": url}
+            detail = image_url.get("detail")
+            if isinstance(detail, str) and detail:
+                image_item["detail"] = detail
+            converted.append(image_item)
             continue
-
-        image_url = item.get("image_url")
-        if not isinstance(image_url, dict):
-            continue
-        url = image_url.get("url")
-        if not isinstance(url, str) or not url:
-            continue
-        image_item: dict[str, Any] = {"type": "input_image", "image_url": url}
-        detail = image_url.get("detail")
-        if isinstance(detail, str) and detail:
-            image_item["detail"] = detail
-        converted.append(image_item)
+        if item_type == "file":
+            file_data = item.get("data", "")
+            file_mime = str(item.get("mime_type", "application/octet-stream"))
+            file_name = str(item.get("file_name", ""))
+            if file_data:
+                converted.append({
+                    "type": "input_file",
+                    "filename": file_name,
+                    "file_data": f"data:{file_mime};base64,{file_data}",
+                })
 
     return converted if converted else ""
 

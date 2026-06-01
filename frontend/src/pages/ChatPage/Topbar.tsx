@@ -150,6 +150,7 @@ export function Topbar({
         )}
         <Button size="small" onClick={onOpenDocs}>文档</Button>
         <Button size="small" onClick={() => navigate("/tutorial")}>教程</Button>
+        <Button size="small" onClick={() => navigate("/clients")}>客户端</Button>
         <Button size="small" onClick={onOpenUsage}>用量</Button>
         <Dropdown
           menu={{

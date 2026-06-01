@@ -18,6 +18,7 @@ from gtpweb.ai_providers import build_model_groups, serialize_model_options
 from gtpweb.auth_jwt import require_login
 from gtpweb.config import AppConfig
 from gtpweb.runtime_state import get_runtime_state
+from gtpweb.user_store import get_user_record
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,36 @@ def create_bootstrap_blueprint(config: AppConfig) -> Blueprint:
             return jsonify({"ok": True, "content": "", "exists": False})
         content = tutorial_file.read_text(encoding="utf-8")
         return jsonify({"ok": True, "content": content, "exists": True})
+
+    @bp.get("/api/clients-config")
+    @require_login
+    def clients_config() -> Any:
+        """返回外部客户端（Codex / Claude Code）所需的 base_url 与当前用户的 api_key。
+
+        - openai 用于 Codex CLI / Codex 桌面客户端（OpenAI 兼容接口）
+        - claude 用于 Claude Code（Anthropic 兼容接口）
+        - 若用户未配置自己的 api_key，返回空串，由前端提示使用全局 key 或联系管理员
+        """
+        from flask import g
+
+        runtime_settings = get_runtime_state().settings
+        username = g.user["username"]
+        record = get_user_record(config.users_file, username) or {}
+        user_api_keys = record.get("api_keys", {}) or {}
+
+        return jsonify(
+            {
+                "ok": True,
+                "openai": {
+                    "base_url": runtime_settings.openai_base_url,
+                    "api_key": user_api_keys.get("openai", ""),
+                },
+                "claude": {
+                    "base_url": runtime_settings.claude_base_url,
+                    "api_key": user_api_keys.get("claude", ""),
+                },
+            }
+        )
 
     @bp.get("/api/logo")
     def serve_logo() -> Any:

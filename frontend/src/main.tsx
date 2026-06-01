@@ -12,6 +12,7 @@ import { LoginPage } from "@/pages/LoginPage";
 import { ChatPage } from "@/pages/ChatPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { TutorialPage } from "@/pages/TutorialPage";
+import { ClientsPage } from "@/pages/ClientsPage";
 import { AuthGuard } from "@/components/AuthGuard";
 import "@/styles/global.css";
 
@@ -49,6 +50,14 @@ const router = createBrowserRouter([
     element: (
       <AuthGuard>
         <TutorialPage />
+      </AuthGuard>
+    ),
+  },
+  {
+    path: "/clients",
+    element: (
+      <AuthGuard>
+        <ClientsPage />
       </AuthGuard>
     ),
   },

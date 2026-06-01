@@ -43,3 +43,20 @@ def test_tutorial_returns_markdown(logged_in_client):
     data = resp.get_json()
     assert "content" in data
     assert "exists" in data
+
+
+def test_clients_config_requires_login(client):
+    resp = client.get("/api/clients-config")
+    assert resp.status_code == 401
+
+
+def test_clients_config_returns_base_urls_and_empty_keys(logged_in_client):
+    resp = logged_in_client.get("/api/clients-config")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["openai"]["base_url"] == "https://example.invalid/v1"
+    # 默认测试用户没有自定义 api_keys，应返回空串
+    assert data["openai"]["api_key"] == ""
+    assert data["claude"]["base_url"] == ""
+    assert data["claude"]["api_key"] == ""

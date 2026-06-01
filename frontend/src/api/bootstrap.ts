@@ -12,3 +12,13 @@ export async function fetchTutorial(): Promise<{ content: string; exists: boolea
   );
   return { content: data.content, exists: data.exists };
 }
+
+export interface ClientsConfig {
+  openai: { base_url: string; api_key: string };
+  claude: { base_url: string; api_key: string };
+}
+
+export async function fetchClientsConfig(): Promise<ClientsConfig> {
+  const data = await apiJson<ClientsConfig & { ok: true }>("/api/clients-config");
+  return { openai: data.openai, claude: data.claude };
+}
